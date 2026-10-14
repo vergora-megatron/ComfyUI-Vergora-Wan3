@@ -55,6 +55,11 @@ except Exception:  # pragma: no cover
     def throw_exception_if_processing_interrupted():
         return None
 
+try:  # lets the node report progress on the canvas instead of an idle "executing"
+    from comfy.utils import ProgressBar
+except Exception:  # pragma: no cover
+    ProgressBar = None
+
 try:
     from PIL import Image
 except ImportError:  # pragma: no cover
@@ -83,6 +88,25 @@ def log(message):
         print(message, flush=True)
     except UnicodeEncodeError:
         print(message.encode("ascii", "replace").decode("ascii"), flush=True)
+
+
+def make_progress(total=100):
+    if ProgressBar is None:
+        return None
+    try:
+        return ProgressBar(total)
+    except Exception:  # pragma: no cover
+        return None
+
+
+def tick_progress(progress, value, total=100):
+    """Advance the canvas progress bar; never let it break a run."""
+    if progress is None:
+        return
+    try:
+        progress.update_absolute(int(value), total)
+    except Exception:  # pragma: no cover
+        pass
 
 
 # --------------------------------------------------------------------------
@@ -438,12 +462,15 @@ def submit_task(cfg, payload):
     return task_id
 
 
-def wait_for_video(cfg, task_id):
+def wait_for_video(cfg, task_id, progress=None):
     started = time.time()
     consecutive_errors = 0
     while True:
         throw_exception_if_processing_interrupted()
         elapsed = time.time() - started
+        # video jobs usually land in 2-6 minutes; show progress on the canvas so the
+        # node does not look frozen while the upstream works
+        tick_progress(progress, min(95, int(elapsed / 300.0 * 100)))
         if elapsed > cfg["timeout"]:
             raise RuntimeError(
                 "等待超时 / timed out after %.0f s. Task %s may still be running; query it with "
@@ -522,6 +549,7 @@ def generate(prompt, model, duration, seed, resolution, ratio, audio, prompt_ext
              reference_video_urls="", reference_audio_urls="",
              file_url="", link_url="", extra_json=""):
     cfg = load_config()
+    progress = make_progress()
     frame = tensor_to_data_uri(first_frame) or (first_frame_url.strip() or None)
     tail = tensor_to_data_uri(last_frame) or (last_frame_url.strip() or None)
 
@@ -534,9 +562,11 @@ def generate(prompt, model, duration, seed, resolution, ratio, audio, prompt_ext
         prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
         frame, tail, images, videos, audios, file_url, link_url, extra_json,
     )
+    tick_progress(progress, 3)
     task_id = submit_task(cfg, payload)
-    video_url = wait_for_video(cfg, task_id)
+    video_url = wait_for_video(cfg, task_id, progress)
     path = download_video(cfg, video_url, task_id)
+    tick_progress(progress, 100)
     return path, task_id, video_url
 
 
