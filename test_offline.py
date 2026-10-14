@@ -191,9 +191,37 @@ def main():
         nodes.submit_task(cfg, {"model": "w3.0-video", "prompt": "x"})
         nodes.wait_for_video(cfg, "test-task-1234")
     except RuntimeError as exc:
-        assert "503" in str(exc) and "No available channel" in str(exc), exc
+        # the raw body is preserved and a hint is added, so match what survives both
+        assert "No available channel" in str(exc), exc
+        assert "5 consecutive poll failures" in str(exc), exc
     else:
         raise AssertionError("an upstream error should raise")
+
+    # ---- known gateway errors get an actionable hint ----
+    nodes.http_post_json = lambda url, headers, payload, timeout=120: (
+        503, '{"error":{"code":"model_not_found","message":"No available channel for model '
+             'minimax-h3 under group minimax-h3 (distributor)"}}')
+    try:
+        nodes.submit_task(nodes.load_config(), {"model": "minimax-h3", "prompt": "x"})
+    except RuntimeError as exc:
+        assert "w3.0-video" in str(exc) and "minimax-h3" in str(exc), exc
+    else:
+        raise AssertionError("a missing channel should raise")
+
+    nodes.http_post_json = lambda url, headers, payload, timeout=120: (
+        403, '{"error":{"message":"user quota is not enough","code":"insufficient_quota"}}')
+    try:
+        nodes.submit_task(nodes.load_config(), {"model": "w3.0-video", "prompt": "x"})
+    except RuntimeError as exc:
+        assert "额度" in str(exc), exc
+    else:
+        raise AssertionError("a quota error should raise")
+
+    failed = {"task_info": {"status": "failed", "error": {
+        "code": 4002, "title": "Infrastructure operation failed",
+        "detail": "Failed to download file: HTTP 502"}}}
+    message = nodes.explain_task_failure(failed, "")
+    assert "素材" in message and "Base64" in message, message
 
     print("OK 全部通过 / all checks passed")
     print("  submit url :", STATE["post_url"])

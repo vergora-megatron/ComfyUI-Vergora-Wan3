@@ -5,7 +5,9 @@ Text-to-video, image-to-video and first/last-frame video all live in one node: t
 submitted, polled and downloaded for you, and the finished clip shows up in the ComfyUI result panel.
 
 - **Model:** `w3.0-video` (Wan 3.0, provider listed as `alibaba` in the Vergora model catalog).
-  A second video model, `minimax-h3`, is available from the same node.
+  A second model, `minimax-h3`, is selectable from the same node, but it is **not enabled for every
+  API key** — if yours lacks a channel for it the gateway answers `503 No available channel`. Keep
+  `w3.0-video` unless you know your key can reach the other one.
 - **Modes:** text to video, image to video (first and/or last frame), and reference to video
   (reference images, videos, audio, documents, or a web link).
 - **Full parameter set:** resolution, aspect ratio, duration, audio on/off, prompt rewriting and
@@ -197,7 +199,7 @@ running long clips. The node itself does not meter anything.
 | Symptom | Cause |
 | --- | --- |
 | `没有配置 API key` | `KEY` is empty in `config.ini` and `VERGORA_API_KEY` is not set |
-| `503 No available channel for model xxx` | The model name is not available on the platform |
+| `503 No available channel for model xxx` | This key has no channel for that model. Switch the `model` widget back to `w3.0-video`, or ask the platform to enable the model for your key. `minimax-h3` in particular is listed by the platform but is not enabled for every key |
 | `401` | Wrong or expired key |
 | `400 prompt is required` | Neither a prompt nor a frame was supplied |
 | `524` | The platform edge timed out. Video generation is asynchronous, so this normally means a platform-side hiccup; retry |
@@ -208,6 +210,9 @@ running long clips. The node itself does not meter anything.
 | `duration 只能是 -1 ...` | `duration` must be `-1` (smart duration) or between 2 and 30 |
 | `4002 Infrastructure operation failed` / `Failed to download file: HTTP 502` | The upstream could not fetch the image or video URL you supplied, usually because the link expired or is blocked for its region. Connect an `IMAGE` tensor instead (the node sends Base64) or host the file at a stable public URL |
 | `403 insufficient_quota` | The account behind the API key is out of quota. Top it up in the platform console |
+
+For the last four cases the node raises its own message instead of dumping the raw gateway body, so
+the error you see in ComfyUI already tells you what to change.
 
 ## Notes and limitations
 

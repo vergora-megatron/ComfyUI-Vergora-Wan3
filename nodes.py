@@ -374,6 +374,43 @@ def resolve_output_dir(cfg):
     return os.path.join(HERE, "output")
 
 
+def explain_http_error(status, text, model=None):
+    """Turn the gateway's terse errors into something a user can act on."""
+    lower = (text or "").lower()
+    snippet = (text or "")[:200]
+    if "no available channel for model" in lower:
+        return (
+            "模型 %s 在当前账号的渠道分组里没有可用通道 / no available channel for model %s with this "
+            "key. 把 model 换回 w3.0-video，或到平台控制台确认这个模型对你这把 key 是否开放。"
+            "Upstream said: %s" % (model or "?", model or "?", snippet)
+        )
+    if "quota" in lower:
+        return ("额度不足 / insufficient quota: 这把 key 背后的账户余额已用尽，去平台控制台充值。"
+                "Upstream said: %s" % snippet)
+    if status in (401, 403):
+        return ("鉴权失败 / authentication failed (HTTP %s): 检查 config.ini 里的 KEY。"
+                "Upstream said: %s" % (status, snippet))
+    if status == 524:
+        return ("平台边缘节点超时 (HTTP 524) / edge timeout: 上游这次没在超时时间内返回，重试一次通常就好。"
+                "Upstream said: %s" % snippet)
+    return None
+
+
+def explain_task_failure(data, text):
+    """Add a hint to an upstream task failure when the reason is a known trap."""
+    error = (data.get("task_info") or {}).get("error") or {}
+    detail = str(error.get("detail") or error.get("title") or "")
+    lower = detail.lower()
+    if "failed to download file" in lower:
+        return ("任务失败：上游下载不到你提供的素材链接 / the upstream could not fetch your media URL. "
+                "多半是链接已过期或对它不可达——把图片接到 IMAGE 输入上（节点会转成 Base64 发送），"
+                "或换成一个长期有效的公开链接。Upstream said: %s" % (detail or text[:200]))
+    if "cannot mix" in lower:
+        return ("任务失败：关键帧模式与参考模式不能混用 / keyframe mode and reference mode cannot be mixed. "
+                "Upstream said: %s" % (detail or text[:200]))
+    return text[:400]
+
+
 # --------------------------------------------------------------------------
 # Job lifecycle
 # --------------------------------------------------------------------------
@@ -387,7 +424,8 @@ def submit_task(cfg, payload):
     log("[vergora] 提交任务 / submit -> %s  %s" % (url, preview))
     status, text = http_post_json(url, auth_headers(cfg), payload, timeout=120)
     if status >= 400:
-        raise RuntimeError("提交失败 / submit failed HTTP %s: %s" % (status, text[:400]))
+        hint = explain_http_error(status, text, payload.get("model"))
+        raise RuntimeError(hint or ("提交失败 / submit failed HTTP %s: %s" % (status, text[:400])))
     try:
         data = json.loads(text)
     except Exception as exc:
@@ -416,7 +454,8 @@ def wait_for_video(cfg, task_id):
                 cfg["base_url"] + "/videos/" + task_id, auth_headers(cfg, with_json=False), timeout=60
             )
             if status >= 400:
-                raise RuntimeError("HTTP %s: %s" % (status, text[:300]))
+                raise RuntimeError(explain_http_error(status, text)
+                                   or ("HTTP %s: %s" % (status, text[:300])))
             data = json.loads(text)
         except Exception as exc:
             # A gateway hiccup should not throw away a job that is already running.
@@ -437,7 +476,7 @@ def wait_for_video(cfg, task_id):
                 return video_url
             raise RuntimeError("任务已完成但没有视频地址 / completed without a video url: %s" % text[:400])
         if state in ("failed", "error", "canceled", "cancelled"):
-            raise RuntimeError("任务失败 / task failed: %s" % text[:400])
+            raise RuntimeError("任务失败 / task failed: %s" % explain_task_failure(data, text))
         time.sleep(cfg["poll_interval"])
 
 
