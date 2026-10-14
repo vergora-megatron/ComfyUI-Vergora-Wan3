@@ -23,18 +23,35 @@ submitted, polled and downloaded for you, and the finished clip shows up in the 
 1. Copy this folder into your ComfyUI `custom_nodes` directory:
    - portable / manual install: `<ComfyUI>/custom_nodes/ComfyUI-Vergora-Wan3`
    - ComfyUI Desktop: the `custom_nodes` folder is inside the installation base path
-2. Open `config.ini` in this folder and put your key in the `[API]` section:
+2. Create your own configuration from the shipped template and fill in your key
+   (`config.ini` itself is gitignored and does not exist in a fresh checkout):
+   - Windows: `copy config.ini.example config.ini`
+   - macOS / Linux: `cp config.ini.example config.ini`
+
+   Then edit the new `config.ini`:
    ```ini
    [API]
    BASE_URL = https://api.vergora.ai/v1
    KEY = sk-your-key-here
    ```
+   Every setting is documented inside `config.ini.example`: `BASE_URL`, `KEY`,
+   `POLL_INTERVAL`, `TIMEOUT` and `OUTPUT_DIR`.
 3. Restart ComfyUI, then add the node from the `vergora` category
    (search for `vergora`, or for `wan3` / `video`).
 
 `config.ini` is listed in `.gitignore`; keep your key out of version control. As an alternative you
 can set the environment variables `VERGORA_BASE_URL` and `VERGORA_API_KEY`, which take precedence
 over the file.
+
+## What is in this repository
+
+| File | Purpose |
+| --- | --- |
+| `nodes.py`, `__init__.py` | The custom node itself |
+| `config.ini.example` | Configuration template, copy it to `config.ini` |
+| `test_offline.py` | Offline self-test, no network or key needed |
+| `pyproject.toml` | Package metadata for the ComfyUI node registry |
+| `README.md`, `LICENSE` | Documentation and license |
 
 ## Node reference
 
@@ -149,9 +166,11 @@ MIT. See `LICENSE`.
 在 ComfyUI 里生成视频。一个节点覆盖三种用法——文生视频、图生视频（首帧）、首尾帧视频；提交、
 轮询、下载全自动，出片后直接显示在结果面板里。同一个节点也能选 `minimax-h3`。
 
-**安装**：把整个文件夹放进 ComfyUI 的 `custom_nodes` 目录 → 打开 `config.ini` 在 `[API]` 的
-`KEY` 填上你的密钥（`BASE_URL` 默认已经指向平台）→ 重启 ComfyUI → 在 `vergora` 分类下添加节点。
-也可以用环境变量 `VERGORA_BASE_URL` / `VERGORA_API_KEY`，优先级高于配置文件。
+**安装**：把整个文件夹放进 ComfyUI 的 `custom_nodes` 目录 → 把 `config.ini.example` 复制一份
+改名为 `config.ini`（Windows：`copy config.ini.example config.ini`），在 `[API]` 的 `KEY` 填上你的
+密钥（`BASE_URL` 默认已经指向平台）→ 重启 ComfyUI → 在 `vergora` 分类下添加节点。
+`config.ini.example` 里每一项都有注释说明；也可以用环境变量 `VERGORA_BASE_URL` / `VERGORA_API_KEY`，
+优先级高于配置文件。`config.ini` 已被 `.gitignore` 忽略，密钥不会被提交。
 
 **三种接法**
 

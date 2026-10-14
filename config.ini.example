@@ -1,10 +1,50 @@
-# Copy this file to config.ini and fill in your key.
+# ---------------------------------------------------------------------------
+# Vergora Wan 3.0 video node - configuration
+#
+# How to use:
+#   1. copy this file to "config.ini" in the same folder
+#        Windows:        copy config.ini.example config.ini
+#        macOS / Linux:  cp config.ini.example config.ini
+#   2. fill in KEY with your Vergora API key
+#   3. restart ComfyUI
+#
+# "config.ini" is listed in .gitignore, so your key never reaches the repo.
+# Environment variables win over this file:
+#   VERGORA_BASE_URL, VERGORA_API_KEY
+# ---------------------------------------------------------------------------
 
 [API]
+
+# Gateway base URL. Do not add a trailing slash.
 BASE_URL = https://api.vergora.ai/v1
-KEY = sk-your-key-here
+
+# Your API key. Required - the node raises a clear error if this is empty.
+# Get it from your Vergora console; it looks like "sk-xxxxxxxx..."
+KEY =
 
 [RUNTIME]
+
+# Seconds between two job status polls. 10 is a sensible default.
+# Smaller values give smoother progress logs and slightly more requests.
 POLL_INTERVAL = 10
+
+# Maximum seconds to wait for one job before the node gives up.
+# Video generation normally takes 2 to 6 minutes.
 TIMEOUT = 1200
+
+# Folder where finished .mp4 files are saved.
+# Leave empty to use ComfyUI's own output directory (recommended).
 OUTPUT_DIR =
+
+# ---------------------------------------------------------------------------
+# 中文说明
+#
+# 1. 把这个文件复制为 config.ini（Windows 命令：copy config.ini.example config.ini）
+# 2. 在 KEY 后面填上你在 Vergora 控制台拿到的密钥，形如 sk-xxxxxxxx
+# 3. 重启 ComfyUI
+#
+# BASE_URL 一般不用改；POLL_INTERVAL 是轮询间隔（秒）；TIMEOUT 是单个任务最长等待（秒）；
+# OUTPUT_DIR 留空表示存到 ComfyUI 自己的输出目录。config.ini 已被 .gitignore 忽略，
+# 不会把你的密钥提交到仓库。也可以用环境变量 VERGORA_API_KEY / VERGORA_BASE_URL 代替本文件，
+# 环境变量的优先级更高。
+# ---------------------------------------------------------------------------
