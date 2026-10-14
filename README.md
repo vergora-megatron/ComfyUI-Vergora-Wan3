@@ -182,6 +182,8 @@ running long clips. The node itself does not meter anything.
 | `file 与 link 不能同时使用` | Send only one of `file` and `link` |
 | `reference_images 最多 10 个` | Array limits are 10 images, 5 videos, 5 audios |
 | `duration 只能是 -1 ...` | `duration` must be `-1` (smart duration) or between 2 and 30 |
+| `4002 Infrastructure operation failed` / `Failed to download file: HTTP 502` | The upstream could not fetch the image or video URL you supplied, usually because the link expired or is blocked for its region. Connect an `IMAGE` tensor instead (the node sends Base64) or host the file at a stable public URL |
+| `403 insufficient_quota` | The account behind the API key is out of quota. Top it up in the platform console |
 
 ## Notes and limitations
 
@@ -189,8 +191,13 @@ running long clips. The node itself does not meter anything.
   do not store the URL as a permanent link.
 - `seed` is forwarded, but whether the upstream model honours it is not guaranteed. Use ComfyUI's
   `control_after_generate = fixed` with a saved seed if you want to try to reproduce a clip.
-- Frame images supplied as `IMAGE` tensors are sent as base64 `data:` URIs. If an upstream rejects
-  data URIs, use `first_frame_url` with a hosted image instead.
+- **Host your input media somewhere stable.** Image URLs are fetched by the upstream service, not
+  by this node, and temporary CDN links expire quickly — a link that returned 200 when you made it
+  can be gone minutes later, and the task then fails with `4002 Failed to download file: HTTP 502`.
+  Images supplied as `IMAGE` tensors are sent as Base64 `data:` URIs and never need to be fetched,
+  which is the most robust path; use `first_frame_url` / `reference_image_urls` only with links you
+  control. `reference_videos` and `reference_audios` are URL-only, so those always need a stable
+  public URL.
 - Pricing, availability and the exact set of accepted parameters are controlled by the platform,
   not by this node.
 
@@ -260,5 +267,15 @@ MIT. See `LICENSE`.
 **已知行为**：轮询请求不能带 `Content-Type`（否则网关会解析空 body 并报 400）；轮询期间的偶发
 网关错误会自动重试，不会把已经在跑的任务丢掉。返回的视频链接是临时 CDN 地址，节点会立刻下载，
 不要把它当长期链接存起来。
+
+**素材一定要放在稳定的地方**：图片链接是**由上游去下载**的，不是节点下载的；临时 CDN 链接很快会
+失效（我们实测中生成出来几分钟后就变成 404 了），上游下载失败时任务会以
+`4002 Infrastructure operation failed / Failed to download file: HTTP 502` 结束（失败任务不计费）。
+所以最稳的做法是把图片接到 `IMAGE` 输入上——节点会转成 Base64 内嵌发送，完全不依赖外部可访问性；
+只有在你确信链接长期有效时才用 `first_frame_url` / `reference_image_urls`。参考视频和参考音频
+官方只接受 URL，必须用稳定可公开访问的地址。
+
+**额度**：额度不足时提交会直接返回 `403 insufficient_quota`（不会产生任务和费用）。API 本身查不到
+真实余额，需要到平台控制台确认。
 
 **自测**：`python test_offline.py` 用假的 HTTP 层跑通全流程，不联网、不花钱、不需要密钥。
