@@ -135,6 +135,21 @@ between them.
 The downloaded file is saved into the ComfyUI output directory (`folder_paths.get_output_directory()`
 unless `OUTPUT_DIR` is set) and named `vergora_<taskid>_<timestamp>.mp4`.
 
+### Ready-made workflows
+
+The `examples/` folder ships three workflows you can load as-is:
+
+| File | What it wires up |
+| --- | --- |
+| `examples/text-to-video.json` | The node on its own, with a sample prompt |
+| `examples/image-to-video.json` | A `LoadImage` node wired into `first_frame` |
+| `examples/reference-to-video.json` | A `LoadImage` node wired into `reference_images` |
+
+Load one through **Workflow → Open**, or drag the `.json` straight onto the canvas. The two image
+examples point at `example.png`, which does not exist on your machine — click the loader and pick any
+image of your own. Keeping the image inside ComfyUI is also the most robust route: the node sends it
+as Base64, so nothing has to be reachable from the internet.
+
 ## What the node does under the hood
 
 The Vergora video API is an asynchronous task API with an OpenAI-Sora-style shape:
@@ -255,6 +270,12 @@ MIT. See `LICENSE`.
 
 **关键约束**：关键帧模式和参考模式**不能混用**；`file` 与 `link` 也**不能同时发**。这些节点会在
 本地直接报错拦下，不会带着错请求去排队。
+
+**开箱可用的工作流**：`examples/` 目录里放了三份可以直接加载的文件（`text-to-video.json` 单独一个
+节点、`image-to-video.json` 用 `LoadImage` 接 `first_frame`、`reference-to-video.json` 接
+`reference_images`）。用法是「工作流 → 打开」选中文件，或把 json 直接拖到画布上；两份带图的里面
+加载器指向 `example.png`，你机器上没有，点一下换成自己的图即可。图片在 ComfyUI 内部传递时节点会
+转成 Base64 发送，不依赖外网可访问性，这是最稳的一条路。
 
 **参数要点**
 
