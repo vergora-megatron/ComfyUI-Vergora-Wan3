@@ -1,0 +1,10 @@
+# Copy this file to config.ini and fill in your key.
+
+[API]
+BASE_URL = https://api.vergora.ai/v1
+KEY = sk-your-key-here
+
+[RUNTIME]
+POLL_INTERVAL = 10
+TIMEOUT = 1200
+OUTPUT_DIR =
