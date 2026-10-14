@@ -54,7 +54,7 @@ over the file.
 | `config.ini.example` | Configuration template, copy it to `config.ini` |
 | `test_offline.py` | Offline self-test, no network or key needed |
 | `pyproject.toml` | Package metadata for the ComfyUI node registry |
-| `README.md`, `LICENSE` | Documentation and license |
+| `README.md`, `CHANGELOG.md`, `LICENSE` | Documentation, release history and license |
 
 ## Node reference
 
@@ -112,6 +112,15 @@ The node enforces all of this locally, so a malformed request fails immediately 
 upstream after you have waited for a queue.
 
 ## Usage
+
+> **Upgrading from 0.1.x?** Version 0.2.0 added widgets in the middle of the node
+> (`resolution`, `ratio`, `audio`, `prompt_extend`, and the reference-mode fields). ComfyUI stores
+> a workflow's widget values **by position**, so a workflow saved with 0.1.x will have its values
+> shifted onto the wrong widgets — for example a seed number ends up on `ratio` and an empty string
+> on `seed`, which shows up as "invalid input" before the run starts. The fix is to **delete the
+> node and add it again**; do not try to repair the widgets one by one, because other values may be
+> silently shifted too. Widgets are only ever appended from now on, and any future breaking change
+> will ship under a new node id.
 
 **Text to video.** Fill in `prompt`, keep `duration` at 5 and press Run. The console prints the
 submit call and then one status line per poll; the clip usually lands in two to four minutes.
@@ -228,6 +237,12 @@ MIT. See `LICENSE`.
 密钥（`BASE_URL` 默认已经指向平台）→ 重启 ComfyUI → 在 `vergora` 分类下添加节点。
 `config.ini.example` 里每一项都有注释说明；也可以用环境变量 `VERGORA_BASE_URL` / `VERGORA_API_KEY`，
 优先级高于配置文件。`config.ini` 已被 `.gitignore` 忽略，密钥不会被提交。
+
+> **从 0.1.x 升级的注意**：0.2.0 在节点中间新增了 `resolution`、`ratio`、`audio`、`prompt_extend`
+> 以及参考模式那一批控件。ComfyUI 是按**位置**保存工作流控件值的，所以用 0.1.x 存过的工作流会出现
+> 参数错位——比如 seed 的数字跑到 `ratio` 上、空字符串跑到 `seed` 上，运行前就会报"无效输入"。
+> 处理办法是**把该节点删掉重新添加**，不要逐个手改（可能还有别的值被静默错位）。以后控件只会往末尾
+> 追加，不会插在中间；如果将来必须做破坏性改动，会用一个**新的节点 id** 发布，旧版本保持可用。
 
 **三种模式**（发哪些媒体字段，决定用哪种能力）
 
