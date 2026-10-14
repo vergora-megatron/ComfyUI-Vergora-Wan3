@@ -31,6 +31,7 @@ import base64
 import configparser
 import json
 import os
+import re
 import shutil
 import time
 import urllib.error
@@ -411,6 +412,13 @@ def explain_http_error(status, text, model=None):
     if "quota" in lower:
         return ("额度不足 / insufficient quota: 这把 key 背后的账户余额已用尽，去平台控制台充值。"
                 "Upstream said: %s" % snippet)
+    if status == 402 or "insufficient balance" in lower:
+        need = re.search(r"required:\s*\d+\s*amount\s*\(([0-9.]+)\s*credits?\)", lower)
+        have = re.search(r"available:\s*\d+\s*amount\s*\(([0-9.]+)\s*credits?\)", lower)
+        return ("余额不足 / insufficient balance (HTTP 402): 这次请求需要 %s credits，账户可用 %s credits。"
+                "去控制台充值，或把 resolution 降到 720p/480p、把 duration 调短后再试。"
+                "Upstream said: %s"
+                % (need.group(1) if need else "?", have.group(1) if have else "?", snippet))
     if status in (401, 403):
         return ("鉴权失败 / authentication failed (HTTP %s): 检查 config.ini 里的 KEY。"
                 "Upstream said: %s" % (status, snippet))

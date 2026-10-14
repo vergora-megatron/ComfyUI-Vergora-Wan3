@@ -217,6 +217,17 @@ def main():
     else:
         raise AssertionError("a quota error should raise")
 
+    nodes.http_post_json = lambda url, headers, payload, timeout=120: (
+        402, '{"status":402,"title":"Insufficient balance","detail":"Insufficient balance to complete '
+             'this request. Required: 1000000 amount (100.0 credits), Available: 750000 amount '
+             '(75.0 credits)"}')
+    try:
+        nodes.submit_task(nodes.load_config(), {"model": "w3.0-video", "prompt": "x"})
+    except RuntimeError as exc:
+        assert "100.0" in str(exc) and "75.0" in str(exc) and "720p" in str(exc), exc
+    else:
+        raise AssertionError("an insufficient balance should raise")
+
     failed = {"task_info": {"status": "failed", "error": {
         "code": 4002, "title": "Infrastructure operation failed",
         "detail": "Failed to download file: HTTP 502"}}}
