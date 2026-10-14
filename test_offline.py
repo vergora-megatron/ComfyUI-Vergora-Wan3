@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
-"""离线自测：把 HTTP 层换成假的，跑通「提交 -> 轮询 -> 下载 -> 返回预览结果」。
-不联网、不花钱、不需要 requests。"""
+"""Offline self-test: run the whole job flow (submit -> poll -> download -> preview)
+against a stub HTTP layer. No network, no API key, no cost.
+
+Run it with any Python that has numpy:  python test_offline.py
+"""
 
 import os
 import sys
@@ -13,13 +16,13 @@ sys.path.insert(0, ROOT)
 
 import nodes  # noqa: E402
 
-STATE = {"polls": 0, "post_url": None, "payload": None, "headers": None, "download_url": None,
-         "get_headers": None, "fail_first": 0}
+STATE = {"polls": 0, "post_url": None, "payload": None, "headers": None,
+         "get_headers": None, "fail_first": 0, "download_url": None}
 OUT_DIR = tempfile.mkdtemp(prefix="vergora_test_")
 
 
 class FakeFolderPaths:
-    """假装是 ComfyUI 的 folder_paths，让 output 目录指到临时目录。"""
+    """Pretend to be ComfyUI's folder_paths so output goes to a temp directory."""
 
     @staticmethod
     def get_output_directory():
@@ -56,15 +59,7 @@ def fake_get_failure(url, headers, timeout=60):
     return 503, '{"error": {"message": "No available channel for model xxx"}}'
 
 
-def call(node, *args, **kwargs):
-    """节点返回 dict（ComfyUI 风格）或元组，这里统一取出结果。"""
-    out = node.run(*args, **kwargs)
-    if isinstance(out, dict):
-        return out, out.get("result")
-    return None, out
-
-
-def main():
+def prepare():
     nodes.http_post_json = fake_post_json
     nodes.http_get_json = fake_get_json
     nodes.http_download = fake_download
@@ -74,68 +69,122 @@ def main():
         "api_key": "sk-test",
         "poll_interval": 0.01,
         "timeout": 30,
-        "output_dir": "",  # 留空 -> 用 folder_paths 的 output 目录
+        "output_dir": "",  # empty -> use folder_paths' output directory
     }
+    return nodes.VergoraVideoGenerator()
 
-    node = nodes.VergoraVideoGenerator()
+
+def call(node, **kwargs):
+    """Node returns a ComfyUI-style dict; hand back both it and the result tuple."""
+    out = node.run(**kwargs)
+    if isinstance(out, dict):
+        return out, out.get("result")
+    return None, out
+
+
+def expect_error(kwargs, needle, node):
+    try:
+        call(node, **kwargs)
+    except RuntimeError as exc:
+        assert needle in str(exc), "expected %r in %r" % (needle, str(exc))
+        return
+    raise AssertionError("expected RuntimeError containing %r" % needle)
+
+
+def main():
+    node = prepare()
     image = np.zeros((64, 96, 3), dtype=np.float32)
     image[:, :, 0] = 1.0
+    batch = np.zeros((2, 64, 96, 3), dtype=np.float32)
+    batch[1, :, :, 1] = 1.0
 
-    out, result = call(node, "a red paper boat on a calm lake", "w3.0-video", 5, -1,
-                       first_frame=image, last_frame=image)
+    # ---- keyframe mode: first + last frame, full parameter set ----
+    out, result = call(
+        node, prompt="a red paper boat on a calm lake", model="w3.0-video",
+        resolution="720p", ratio="16:9", duration=5, audio=False, prompt_extend=False,
+        seed=42, first_frame=image, last_frame=image,
+    )
     path, task_id, video_url = result
+    payload = STATE["payload"]
     assert STATE["post_url"] == "https://api.vergora.ai/v1/videos", STATE["post_url"]
     assert STATE["headers"]["Authorization"] == "Bearer sk-test", STATE["headers"]
     assert STATE["headers"]["Content-Type"] == "application/json", STATE["headers"]
-    # 轮询必须不带 Content-Type，否则网关会把空 body 当 JSON 解析并返回 400
+    # polling must not carry Content-Type (the gateway 400s on an empty JSON body)
     assert "Content-Type" not in STATE["get_headers"], STATE["get_headers"]
-    assert STATE["get_headers"]["Authorization"] == "Bearer sk-test", STATE["get_headers"]
-    payload = STATE["payload"]
     assert payload["model"] == "w3.0-video" and payload["duration"] == 5, payload
-    assert payload["prompt"].startswith("a red paper boat")
-    assert payload["first_frame"].startswith("data:image/png;base64,")
-    assert payload["last_frame"].startswith("data:image/png;base64,")
-    assert "seed" not in payload, payload
+    assert payload["resolution"] == "720p" and payload["ratio"] == "16:9", payload
+    assert payload["audio"] is False and payload["prompt_extend"] is False, payload
+    assert payload["seed"] == 42, payload
+    assert payload["first_frame"].startswith("data:image/png;base64,"), payload
+    assert payload["last_frame"].startswith("data:image/png;base64,"), payload
     assert task_id == "test-task-1234" and video_url.endswith("result_00.mp4")
     assert STATE["polls"] == 3, STATE["polls"]
     assert os.path.exists(path) and os.path.getsize(path) > 0, path
 
-    # 关键点：必须被当成输出节点，并且带上前端能识别的视频预览结果
+    # it must register as an output node and return a renderable video preview
     assert nodes.VergoraVideoGenerator.OUTPUT_NODE is True
     assert out is not None and "ui" in out, out
     item = out["ui"]["images"][0]
-    assert item["filename"] == os.path.basename(path), item
-    assert item["subfolder"] == "", item
-    assert item["type"] == "output" and item["format"] == "video/mp4", item
+    assert item == {"filename": os.path.basename(path), "subfolder": "",
+                    "type": "output", "format": "video/mp4"}, item
     assert out["ui"]["animated"] == (True,), out["ui"]
 
-    # 文生视频：只给 prompt
+    # ---- text to video: defaults, smart duration -1, no seed sent ----
     STATE["polls"] = 0
-    _, result2 = call(node, "just text", "minimax-h3", 3, 42)
-    assert "first_frame" not in STATE["payload"] and "last_frame" not in STATE["payload"]
-    assert STATE["payload"]["seed"] == 42
+    _, result2 = call(node, prompt="just text", model="w3.0-video", resolution="1080p",
+                      ratio="adaptive", duration=-1, audio=True, prompt_extend=True, seed=-1)
+    p2 = STATE["payload"]
+    assert "first_frame" not in p2 and "last_frame" not in p2, p2
+    assert "seed" not in p2, p2
+    assert p2["duration"] == -1 and p2["resolution"] == "1080p" and p2["ratio"] == "adaptive", p2
     assert os.path.exists(result2[0])
 
-    # extra_json 透传
+    # ---- reference mode: batch images + URL lists + file ----
     STATE["polls"] = 0
-    call(node, "hi", "w3.0-video", 2, -1, extra_json='{"resolution": "720p"}')
-    assert STATE["payload"]["resolution"] == "720p", STATE["payload"]
+    call(node, prompt="Image 1 holds Image 2", model="w3.0-video", resolution="720p",
+         ratio="adaptive", duration=10, audio=True, prompt_extend=True, seed=-1,
+         reference_images=batch,
+         reference_image_urls="https://example.com/a.png\n# comment\nhttps://example.com/b.png\n",
+         reference_video_urls="https://example.com/role.mp4",
+         reference_audio_urls="https://example.com/song.mp3")
+    p3 = STATE["payload"]
+    assert len(p3["reference_images"]) == 4, p3["reference_images"]
+    assert p3["reference_images"][0].startswith("data:image/png;base64,")
+    assert p3["reference_images"][2] == "https://example.com/a.png"
+    assert p3["reference_videos"] == ["https://example.com/role.mp4"], p3
+    assert p3["reference_audios"] == ["https://example.com/song.mp3"], p3
+    assert "first_frame" not in p3, p3
 
-    # 网关偶发 400 要能自愈，不能把整个任务拖死
+    # ---- extras pass through ----
+    STATE["polls"] = 0
+    call(node, prompt="hi", model="w3.0-video", resolution="480p", ratio="9:16",
+         duration=2, audio=True, prompt_extend=True, seed=-1,
+         extra_json='{"vendor_flag": true}')
+    assert STATE["payload"]["vendor_flag"] is True, STATE["payload"]
+
+    # ---- gateway hiccups must heal themselves ----
     STATE["polls"] = 0
     STATE["fail_first"] = 2
-    out_r, result_r = call(node, "retry me", "w3.0-video", 2, -1)
+    _, result_r = call(node, prompt="retry me", model="w3.0-video", resolution="1080p",
+                       ratio="adaptive", duration=5, audio=True, prompt_extend=True, seed=-1)
     assert os.path.exists(result_r[0]), result_r
 
-    # 空输入报错
-    try:
-        call(node, "", "w3.0-video", 5, -1)
-    except RuntimeError as exc:
-        assert "至少要给" in str(exc), exc
-    else:
-        raise AssertionError("空输入应当报错")
+    # ---- contract validation, caught before anything is billed ----
+    base = dict(model="w3.0-video", resolution="1080p", ratio="adaptive",
+                duration=5, audio=True, prompt_extend=True, seed=-1)
+    expect_error(dict(base, prompt=""), "至少要给", node)
+    expect_error(dict(base, prompt="x", first_frame=image,
+                      reference_video_urls="https://example.com/v.mp4"),
+                 "互斥", node)
+    expect_error(dict(base, prompt="x", file_url="https://example.com/a.pdf",
+                      link_url="https://example.com/page"), "不能同时", node)
+    expect_error(dict(base, prompt="x",
+                      reference_image_urls="\n".join("https://e.com/%d.png" % i for i in range(11))),
+                 "最多", node)
+    expect_error(dict(base, prompt="x", duration=45), "duration", node)
+    expect_error(dict(base, prompt="x", extra_json="{not json"), "JSON", node)
 
-    # 平台报错要原样抛出
+    # ---- upstream failures surface with the response body ----
     nodes.http_get_json = fake_get_failure
     try:
         cfg = nodes.load_config()
@@ -144,14 +193,14 @@ def main():
     except RuntimeError as exc:
         assert "503" in str(exc) and "No available channel" in str(exc), exc
     else:
-        raise AssertionError("上游报错应当抛出")
+        raise AssertionError("an upstream error should raise")
 
-    print("OK 全部通过")
-    print("  提交 URL   :", STATE["post_url"])
-    print("  提交体字段 :", sorted(STATE["payload"].keys()))
-    print("  输出节点   :", nodes.VergoraVideoGenerator.OUTPUT_NODE)
-    print("  预览条目   :", item)
-    print("  落盘文件   :", path, os.path.getsize(path), "bytes")
+    print("OK 全部通过 / all checks passed")
+    print("  submit url :", STATE["post_url"])
+    print("  payload    :", sorted(payload.keys()))
+    print("  output node:", nodes.VergoraVideoGenerator.OUTPUT_NODE)
+    print("  preview    :", item)
+    print("  saved file :", path, os.path.getsize(path), "bytes")
 
 
 if __name__ == "__main__":

@@ -1,18 +1,30 @@
 # -*- coding: utf-8 -*-
-"""ComfyUI 节点：调 vergora 网关的 /v1/videos 生成视频。
+"""ComfyUI node: Wan 3.0 video generation through the Vergora API.
 
-接口流程（2026-10-14 实测）：
-    提交  POST {base}/videos        -> {"task_info": {"id": "...", "status": "pending"}}
-    查询  GET  {base}/videos/{id}   -> {"task_info": {"status": "pending|processing|completed|failed"},
-                                        "videos": ["https://.../result_00.mp4"]}
-    下载  GET  videos[0]
+Field set and constraints follow the official W3.0 contract documented at
+https://www.mulerouter.ai/docs/api-reference/endpoint/alibaba/w3.0-video/generation
+(Vergora's gateway exposes the same fields through the asynchronous
+`/v1/videos` route).
 
-请求体至少要给 prompt / first_frame / last_frame / reference_images /
-reference_videos / reference_audios / file / link 之一（接口的校验要求）。
+Flow (verified 2026-10-14):
+    submit  POST {base}/videos       -> {"task_info": {"id": "...", "status": "pending"}}
+    poll    GET  {base}/videos/{id}  -> {"task_info": {"status": "pending|processing|completed|failed"},
+                                         "videos": ["https://.../result_00.mp4"]}
+    fetch   GET  videos[0]
 
-HTTP 层优先用 requests，没有就退回标准库 urllib，保证节点在任何 ComfyUI
-环境里都能加载。密钥只从 config.ini 或环境变量读，不做成节点参数，
-这样工作流 JSON 里不会带 key。
+Three capability sets are selected by the media fields you send:
+    prompt only                              -> text to video
+    first_frame / last_frame                 -> image to video (keyframe mode)
+    reference_images / videos / audios,
+    file, link                               -> reference to video (reference mode)
+
+Keyframe mode and reference mode are mutually exclusive, and `file` cannot be
+combined with `link`.
+
+The HTTP layer uses `requests` when available and falls back to the standard
+library `urllib`, so the node loads in any ComfyUI environment. The API key is
+read from config.ini or the environment; it is never a node widget, so workflow
+files never carry your key.
 """
 
 import base64
@@ -29,10 +41,10 @@ import numpy as np
 
 try:
     import requests
-except ImportError:  # ComfyUI 自带环境不一定装 requests
+except ImportError:  # ComfyUI's environment does not always ship requests
     requests = None
 
-try:  # ComfyUI 环境里存在；脱离 ComfyUI 单跑时退化成节点目录下的 output
+try:  # present inside ComfyUI; falls back to a local output folder otherwise
     import folder_paths
 except Exception:  # pragma: no cover
     folder_paths = None
@@ -52,12 +64,21 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.ini")
 
 DEFAULT_BASE_URL = "https://api.vergora.ai/v1"
+
+# w3.0-video is Alibaba Wan 3.0. w3.0-video-pro is the sibling that adds 2k/4k.
 VIDEO_MODELS = ["w3.0-video", "minimax-h3"]
+RESOLUTIONS = ["1080p", "720p", "480p"]
+RATIOS = ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"]
+
+MAX_REFERENCE_IMAGES = 10
+MAX_REFERENCE_VIDEOS = 5
+MAX_REFERENCE_AUDIOS = 5
+
 CATEGORY = "vergora"
 
 
 def log(message):
-    """日志兜底：控制台不是 UTF-8 时也不至于因为中文报错。"""
+    """Print without exploding on consoles that cannot encode CJK."""
     try:
         print(message, flush=True)
     except UnicodeEncodeError:
@@ -65,11 +86,11 @@ def log(message):
 
 
 # --------------------------------------------------------------------------
-# HTTP 层：有 requests 用 requests，没有就用标准库
+# HTTP layer: requests when installed, standard library otherwise
 # --------------------------------------------------------------------------
 
 def http_post_json(url, headers, payload, timeout=120):
-    """返回 (状态码, 响应文本)。"""
+    """Return (status_code, response_text)."""
     body = json.dumps(payload).encode("utf-8")
     if requests is not None:
         response = requests.post(url, headers=headers, data=body, timeout=timeout)
@@ -83,7 +104,11 @@ def http_post_json(url, headers, payload, timeout=120):
 
 
 def http_get_json(url, headers, timeout=60):
-    """返回 (状态码, 响应文本)。"""
+    """Return (status_code, response_text).
+
+    Never attach Content-Type here: the gateway tries to parse an empty body as
+    JSON and answers 400 (common.UnmarshalBodyReusable failed) if you do.
+    """
     if requests is not None:
         response = requests.get(url, headers=headers, timeout=timeout)
         return response.status_code, response.text
@@ -110,11 +135,11 @@ def http_download(url, dest_path, timeout=600):
 
 
 # --------------------------------------------------------------------------
-# 配置与工具
+# Configuration
 # --------------------------------------------------------------------------
 
 def load_config():
-    """读 config.ini，环境变量优先级更高。"""
+    """Read config.ini; environment variables win over the file."""
     cfg = {
         "base_url": DEFAULT_BASE_URL,
         "api_key": "",
@@ -151,11 +176,11 @@ def load_config():
 
 
 def auth_headers(cfg, with_json=True):
-    """with_json=False 用于 GET：带 Content-Type 但没有请求体时，
-    网关会尝试解析空 body 并返回 400（实测报 UnmarshalBodyReusable failed）。"""
+    """with_json=False for GET requests (see http_get_json)."""
     if not cfg["api_key"]:
         raise RuntimeError(
-            "没有配置 API key：请在 %s 的 [API] 段填 KEY，或设置环境变量 VERGORA_API_KEY" % CONFIG_PATH
+            "没有配置 API key / no API key configured: put it in %s under [API] KEY, "
+            "or set the environment variable VERGORA_API_KEY" % CONFIG_PATH
         )
     headers = {"Authorization": "Bearer " + cfg["api_key"]}
     if with_json:
@@ -163,16 +188,14 @@ def auth_headers(cfg, with_json=True):
     return headers
 
 
-def tensor_to_data_uri(image):
-    """把 ComfyUI 的 IMAGE 张量转成 data URI（PNG）。"""
-    if image is None:
-        return None
+# --------------------------------------------------------------------------
+# Image helpers
+# --------------------------------------------------------------------------
+
+def array_to_data_uri(frame):
     if Image is None:
-        raise RuntimeError("需要 Pillow 才能把 IMAGE 转成图片")
-    arr = image
-    if hasattr(arr, "detach"):
-        arr = arr.detach().cpu().numpy()
-    arr = np.asarray(arr)
+        raise RuntimeError("需要 Pillow 才能把 IMAGE 转成图片 / Pillow is required to encode IMAGE tensors")
+    arr = np.asarray(frame)
     if arr.ndim == 4:
         arr = arr[0]
     arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
@@ -181,33 +204,140 @@ def tensor_to_data_uri(image):
     return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
 
 
-def build_payload(prompt, model, duration, seed, first_frame=None, last_frame=None, extra_json=""):
-    payload = {"model": model}
+def tensor_to_data_uri(image):
+    """First frame of a single IMAGE, or None."""
+    if image is None:
+        return None
+    arr = image
+    if hasattr(arr, "detach"):
+        arr = arr.detach().cpu().numpy()
+    arr = np.asarray(arr)
+    if arr.ndim == 3:
+        arr = arr[None, ...]
+    return array_to_data_uri(arr[0])
+
+
+def tensor_batch_to_data_uris(images, limit):
+    """Every frame of a batch (or a single image) as data URIs, capped at limit."""
+    if images is None:
+        return []
+    arr = images
+    if hasattr(arr, "detach"):
+        arr = arr.detach().cpu().numpy()
+    arr = np.asarray(arr)
+    if arr.ndim == 3:
+        arr = arr[None, ...]
+    return [array_to_data_uri(frame) for frame in arr[:limit]]
+
+
+def split_uri_lines(text):
+    """One URI per line; blank lines and comments are ignored."""
+    if not text:
+        return []
+    out = []
+    for line in str(text).splitlines():
+        line = line.strip()
+        if line and not line.startswith("#"):
+            out.append(line)
+    return out
+
+
+# --------------------------------------------------------------------------
+# Request building and validation
+# --------------------------------------------------------------------------
+
+def validate_request(prompt, first_frame, last_frame, reference_images,
+                     reference_videos, reference_audios, file_url, link_url, duration):
+    """Check the contract locally so a bad request is caught before it is billed."""
+    has_prompt = bool(prompt and prompt.strip())
+    has_keyframe = bool(first_frame or last_frame)
+    has_reference = bool(reference_images or reference_videos or reference_audios
+                         or file_url or link_url)
+
+    if not (has_prompt or has_keyframe or has_reference):
+        raise RuntimeError(
+            "至少要给 prompt、首帧/尾帧，或参考素材其中之一 / provide at least one of "
+            "prompt, a keyframe (first_frame/last_frame) or a reference input "
+            "(reference_images/reference_videos/reference_audios/file/link)"
+        )
+    if has_keyframe and has_reference:
+        raise RuntimeError(
+            "关键帧模式与参考模式互斥：首帧/尾帧不能和 reference_*/file/link 同时使用 / "
+            "keyframe mode (first_frame, last_frame) and reference mode "
+            "(reference_images, reference_videos, reference_audios, file, link) are mutually exclusive"
+        )
+    if file_url and link_url:
+        raise RuntimeError(
+            "file 与 link 不能同时使用 / file and link are mutually exclusive"
+        )
+    if len(reference_images) > MAX_REFERENCE_IMAGES:
+        raise RuntimeError("reference_images 最多 %d 个 / at most %d reference images"
+                           % (MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGES))
+    if len(reference_videos) > MAX_REFERENCE_VIDEOS:
+        raise RuntimeError("reference_videos 最多 %d 个 / at most %d reference videos"
+                           % (MAX_REFERENCE_VIDEOS, MAX_REFERENCE_VIDEOS))
+    if len(reference_audios) > MAX_REFERENCE_AUDIOS:
+        raise RuntimeError("reference_audios 最多 %d 个 / at most %d reference audios"
+                           % (MAX_REFERENCE_AUDIOS, MAX_REFERENCE_AUDIOS))
+    if int(duration) != -1 and not 2 <= int(duration) <= 30:
+        raise RuntimeError("duration 只能是 -1（智能时长）或 2 到 30 秒 / duration must be -1 "
+                           "(smart duration) or 2 to 30 seconds")
+
+
+def build_payload(prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
+                  first_frame=None, last_frame=None,
+                  reference_images=None, reference_videos=None, reference_audios=None,
+                  file_url="", link_url="", extra_json=""):
+    reference_images = list(reference_images or [])
+    reference_videos = list(reference_videos or [])
+    reference_audios = list(reference_audios or [])
+    file_url = (file_url or "").strip()
+    link_url = (link_url or "").strip()
+
+    validate_request(prompt, first_frame, last_frame, reference_images,
+                     reference_videos, reference_audios, file_url, link_url, duration)
+
+    payload = {
+        "model": model,
+        "duration": int(duration),
+        "resolution": resolution,
+        "ratio": ratio,
+        "audio": bool(audio),
+        "prompt_extend": bool(prompt_extend),
+    }
     if prompt and prompt.strip():
         payload["prompt"] = prompt.strip()
-    if duration and int(duration) > 0:
-        payload["duration"] = int(duration)
     if seed is not None and int(seed) >= 0:
         payload["seed"] = int(seed)
     if first_frame:
         payload["first_frame"] = first_frame
     if last_frame:
         payload["last_frame"] = last_frame
+    if reference_images:
+        payload["reference_images"] = reference_images
+    if reference_videos:
+        payload["reference_videos"] = reference_videos
+    if reference_audios:
+        payload["reference_audios"] = reference_audios
+    if file_url:
+        payload["file"] = file_url
+    if link_url:
+        payload["link"] = link_url
+
     if extra_json and extra_json.strip():
         try:
             extra = json.loads(extra_json)
         except Exception as exc:
-            raise RuntimeError("extra_json 不是合法 JSON：%s" % exc)
+            raise RuntimeError("extra_json 不是合法 JSON / not valid JSON: %s" % exc)
         if not isinstance(extra, dict):
-            raise RuntimeError('extra_json 必须是 JSON 对象，例如 {"resolution": "720p"}')
+            raise RuntimeError('extra_json 必须是 JSON 对象，例如 {"duration": 10} / '
+                               'extra_json must be a JSON object')
         payload.update(extra)
-    if not any(k in payload for k in ("prompt", "first_frame", "last_frame")):
-        raise RuntimeError("至少要给 prompt、首帧或尾帧其中之一")
     return payload
 
 
 def extract_video_url(data):
-    """不同上游返回字段不完全一致，按可能性依次取。"""
+    """Upstreams differ slightly in shape; try the likely keys in order."""
     videos = data.get("videos")
     if isinstance(videos, list) and videos:
         first = videos[0]
@@ -245,7 +375,7 @@ def resolve_output_dir(cfg):
 
 
 # --------------------------------------------------------------------------
-# 主流程
+# Job lifecycle
 # --------------------------------------------------------------------------
 
 def submit_task(cfg, payload):
@@ -254,19 +384,19 @@ def submit_task(cfg, payload):
         {k: (v[:60] + "..." if isinstance(v, str) and len(v) > 60 else v) for k, v in payload.items()},
         ensure_ascii=False,
     )
-    log("[vergora] 提交任务 -> %s  %s" % (url, preview))
+    log("[vergora] 提交任务 / submit -> %s  %s" % (url, preview))
     status, text = http_post_json(url, auth_headers(cfg), payload, timeout=120)
     if status >= 400:
-        raise RuntimeError("提交失败 HTTP %s: %s" % (status, text[:400]))
+        raise RuntimeError("提交失败 / submit failed HTTP %s: %s" % (status, text[:400]))
     try:
         data = json.loads(text)
     except Exception as exc:
-        raise RuntimeError("提交返回不是 JSON（HTTP %s）：%s" % (status, text[:400])) from exc
+        raise RuntimeError("提交返回不是 JSON（HTTP %s）/ not JSON: %s" % (status, text[:400])) from exc
     task_info = data.get("task_info") or {}
     task_id = task_info.get("id") or data.get("id")
     if not task_id:
-        raise RuntimeError("返回里没有任务 id: %s" % text[:400])
-    log("[vergora] 任务已创建 id=%s status=%s" % (task_id, task_info.get("status")))
+        raise RuntimeError("返回里没有任务 id / no task id in response: %s" % text[:400])
+    log("[vergora] 任务已创建 / task created id=%s status=%s" % (task_id, task_info.get("status")))
     return task_id
 
 
@@ -278,8 +408,8 @@ def wait_for_video(cfg, task_id):
         elapsed = time.time() - started
         if elapsed > cfg["timeout"]:
             raise RuntimeError(
-                "等待超时（%.0f 秒），任务 %s 可能仍在处理，可手动查询 GET %s/videos/%s"
-                % (cfg["timeout"], task_id, cfg["base_url"], task_id)
+                "等待超时 / timed out after %.0f s. Task %s may still be running; query it with "
+                "GET %s/videos/%s" % (cfg["timeout"], task_id, cfg["base_url"], task_id)
             )
         try:
             status, text = http_get_json(
@@ -289,24 +419,25 @@ def wait_for_video(cfg, task_id):
                 raise RuntimeError("HTTP %s: %s" % (status, text[:300]))
             data = json.loads(text)
         except Exception as exc:
-            # 网关偶发抽风不该让整个任务失败，连续出错够多次才放弃
+            # A gateway hiccup should not throw away a job that is already running.
             consecutive_errors += 1
-            log("[vergora] 查询出错第 %d 次：%s" % (consecutive_errors, exc))
+            log("[vergora] 查询出错第 %d 次 / poll error %d: %s" % (consecutive_errors, consecutive_errors, exc))
             if consecutive_errors >= 5:
-                raise RuntimeError("连续 %d 次查询失败，最后一次：%s" % (consecutive_errors, exc))
+                raise RuntimeError("连续 %d 次查询失败 / %d consecutive poll failures, last: %s"
+                                   % (consecutive_errors, consecutive_errors, exc))
             time.sleep(cfg["poll_interval"])
             continue
         consecutive_errors = 0
         task_info = data.get("task_info") or {}
         state = str(task_info.get("status") or data.get("status") or "").lower()
-        log("[vergora] 已等待 %4.0f 秒  状态=%s" % (elapsed, state or "未知"))
+        log("[vergora] 已等待 / waited %4.0f s  状态 / status=%s" % (elapsed, state or "unknown"))
         if state in ("completed", "succeeded", "success", "done"):
             video_url = extract_video_url(data)
             if video_url:
                 return video_url
-            raise RuntimeError("任务已完成但没找到视频地址: %s" % text[:400])
+            raise RuntimeError("任务已完成但没有视频地址 / completed without a video url: %s" % text[:400])
         if state in ("failed", "error", "canceled", "cancelled"):
-            raise RuntimeError("任务失败: %s" % text[:400])
+            raise RuntimeError("任务失败 / task failed: %s" % text[:400])
         time.sleep(cfg["poll_interval"])
 
 
@@ -316,14 +447,15 @@ def download_video(cfg, video_url, task_id):
     filename = "vergora_%s_%d.mp4" % (str(task_id).replace("-", "")[:8], int(time.time()))
     path = os.path.join(out_dir, filename)
     http_download(video_url, path, timeout=600)
-    log("[vergora] 已保存 %s（%.1f MB）" % (path, os.path.getsize(path) / 1024.0 / 1024.0))
+    log("[vergora] 已保存 / saved %s (%.1f MB)" % (path, os.path.getsize(path) / 1024.0 / 1024.0))
     return path
 
 
 def build_preview_ui(path):
-    """按 ComfyUI 前端认识的格式返回预览结果，让视频直接显示在结果面板里。
+    """Return a UI entry the ComfyUI frontend renders as a video, when possible.
 
-    只有文件确实位于 ComfyUI 的 output 目录时才返回，否则前端取不到文件。
+    Only returned when the file really sits inside ComfyUI's output directory,
+    otherwise the frontend cannot fetch it.
     """
     if folder_paths is None:
         return None
@@ -345,20 +477,37 @@ def build_preview_ui(path):
     }
 
 
-def generate(prompt, model, duration, seed, first_frame=None, last_frame=None,
-             first_frame_url="", last_frame_url="", extra_json=""):
+def generate(prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
+             first_frame=None, last_frame=None, first_frame_url="", last_frame_url="",
+             reference_images=None, reference_image_urls="",
+             reference_video_urls="", reference_audio_urls="",
+             file_url="", link_url="", extra_json=""):
     cfg = load_config()
     frame = tensor_to_data_uri(first_frame) or (first_frame_url.strip() or None)
     tail = tensor_to_data_uri(last_frame) or (last_frame_url.strip() or None)
-    payload = build_payload(prompt, model, duration, seed, frame, tail, extra_json)
+
+    images = tensor_batch_to_data_uris(reference_images, MAX_REFERENCE_IMAGES)
+    images += split_uri_lines(reference_image_urls)
+    videos = split_uri_lines(reference_video_urls)
+    audios = split_uri_lines(reference_audio_urls)
+
+    payload = build_payload(
+        prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
+        frame, tail, images, videos, audios, file_url, link_url, extra_json,
+    )
     task_id = submit_task(cfg, payload)
     video_url = wait_for_video(cfg, task_id)
     path = download_video(cfg, video_url, task_id)
     return path, task_id, video_url
 
 
+# --------------------------------------------------------------------------
+# Node
+# --------------------------------------------------------------------------
+
 class VergoraVideoGenerator:
-    """一个节点覆盖三种用法：只填 prompt 是文生视频；接首帧是图生视频；首尾帧都接是首尾帧视频。"""
+    """Wan 3.0 video generation: text to video, keyframe (image) to video, or
+    reference to video, all through one node."""
 
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
@@ -372,24 +521,46 @@ class VergoraVideoGenerator:
             "required": {
                 "prompt": ("STRING", {"multiline": True, "default": ""}),
                 "model": (VIDEO_MODELS, {"default": VIDEO_MODELS[0]}),
-                "duration": ("INT", {"default": 5, "min": 1, "max": 30, "step": 1}),
-                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647}),
+                "resolution": (RESOLUTIONS, {"default": RESOLUTIONS[0]}),
+                "ratio": (RATIOS, {"default": RATIOS[0]}),
+                "duration": ("INT", {"default": 5, "min": -1, "max": 30, "step": 1,
+                                     "tooltip": "-1 = smart duration, otherwise 2 to 30 seconds"}),
+                "audio": ("BOOLEAN", {"default": True}),
+                "prompt_extend": ("BOOLEAN", {"default": True,
+                                              "tooltip": "Let upstream rewrite the prompt (usually better motion)"}),
+                "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647,
+                                 "tooltip": "-1 = let the service pick a seed"}),
             },
             "optional": {
-                "first_frame": ("IMAGE",),
-                "last_frame": ("IMAGE",),
-                "first_frame_url": ("STRING", {"default": ""}),
-                "last_frame_url": ("STRING", {"default": ""}),
-                "extra_json": ("STRING", {"multiline": True, "default": ""}),
+                "first_frame": ("IMAGE", {"tooltip": "Keyframe mode: the first frame of the video"}),
+                "last_frame": ("IMAGE", {"tooltip": "Keyframe mode: the last frame of the video"}),
+                "first_frame_url": ("STRING", {"default": "", "tooltip": "Used when first_frame is not connected"}),
+                "last_frame_url": ("STRING", {"default": "", "tooltip": "Used when last_frame is not connected"}),
+                "reference_images": ("IMAGE", {"tooltip": "Reference mode: a batch of up to 10 reference images"}),
+                "reference_image_urls": ("STRING", {"multiline": True, "default": "",
+                                                    "tooltip": "Reference mode: image URLs, one per line"}),
+                "reference_video_urls": ("STRING", {"multiline": True, "default": "",
+                                                    "tooltip": "Reference mode: video URLs (mp4/mov), one per line, up to 5"}),
+                "reference_audio_urls": ("STRING", {"multiline": True, "default": "",
+                                                    "tooltip": "Reference mode: audio URLs (wav/mp3), one per line, up to 5"}),
+                "file_url": ("STRING", {"default": "", "tooltip": "Reference mode: document URL (pdf, docx, pptx, ...)"}),
+                "link_url": ("STRING", {"default": "", "tooltip": "Reference mode: public web page URL"}),
+                "extra_json": ("STRING", {"multiline": True, "default": "",
+                                          "tooltip": "Extra request fields, e.g. {\"duration\": 10}"}),
             },
         }
 
-    def run(self, prompt, model, duration, seed,
-            first_frame=None, last_frame=None,
-            first_frame_url="", last_frame_url="", extra_json=""):
+    def run(self, prompt, model, resolution, ratio, duration, audio, prompt_extend, seed,
+            first_frame=None, last_frame=None, first_frame_url="", last_frame_url="",
+            reference_images=None, reference_image_urls="",
+            reference_video_urls="", reference_audio_urls="",
+            file_url="", link_url="", extra_json=""):
         path, task_id, video_url = generate(
-            prompt, model, duration, seed,
-            first_frame, last_frame, first_frame_url, last_frame_url, extra_json,
+            prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
+            first_frame, last_frame, first_frame_url, last_frame_url,
+            reference_images, reference_image_urls,
+            reference_video_urls, reference_audio_urls,
+            file_url, link_url, extra_json,
         )
         result = (path, task_id, video_url)
         preview = build_preview_ui(path)
@@ -403,5 +574,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VergoraVideoGenerator": "vergora 视频生成（文生/图生/首尾帧）",
+    "VergoraVideoGenerator": "vergora Wan 3.0 视频生成（文生/图生/参考）",
 }

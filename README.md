@@ -6,8 +6,11 @@ submitted, polled and downloaded for you, and the finished clip shows up in the 
 
 - **Model:** `w3.0-video` (Wan 3.0, provider listed as `alibaba` in the Vergora model catalog).
   A second video model, `minimax-h3`, is available from the same node.
-- **Modes:** text → video, image → video (first frame), first frame + last frame.
-- **No code required:** prompts, duration and frames are node widgets; wiring is optional.
+- **Modes:** text to video, image to video (first and/or last frame), and reference to video
+  (reference images, videos, audio, documents, or a web link).
+- **Full parameter set:** resolution, aspect ratio, duration, audio on/off, prompt rewriting and
+  seed are all node widgets; the request contract is validated locally before anything is billed.
+- **No code required:** prompts and media are widgets; wiring is optional.
 - **Verified on:** ComfyUI 0.40.0 (frontend 1.55.17), Python 3.13, Windows 11, RTX 5070.
 
 ## Requirements
@@ -56,20 +59,29 @@ over the file.
 ## Node reference
 
 Node id: `VergoraVideoGenerator`
-Display name: `vergora 视频生成（文生/图生/首尾帧）`
+Display name: `vergora Wan 3.0 视频生成（文生/图生/参考）`
 Category: `vergora`
 
-| Input | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `prompt` | STRING (multiline) | empty | What the clip should show. Required unless a frame is supplied |
-| `model` | COMBO | `w3.0-video` | `w3.0-video` (Wan 3.0) or `minimax-h3` |
-| `duration` | INT | 5 | Clip length in seconds, 1 to 30. This is what controls length, not the prompt |
-| `seed` | INT | -1 | `-1` means "do not send a seed" and the upstream picks one. Any value `>= 0` is sent as-is |
-| `first_frame` | IMAGE (optional) | not connected | Connect an image to get image-to-video |
-| `last_frame` | IMAGE (optional) | not connected | Connect together with `first_frame` for first/last-frame video |
-| `first_frame_url` | STRING (optional) | empty | A public image URL, used when `first_frame` is not connected |
-| `last_frame_url` | STRING (optional) | empty | A public image URL, used when `last_frame` is not connected |
-| `extra_json` | STRING (optional) | empty | Extra request fields, for example `{"resolution": "720p"}` |
+| Input | Type | Default | Mode | Notes |
+| --- | --- | --- | --- | --- |
+| `prompt` | STRING (multiline) | empty | all | What the clip should show, up to 20000 characters. In reference mode you can address inputs as `Image 1`, `Video 1` |
+| `model` | COMBO | `w3.0-video` | all | `w3.0-video` (Wan 3.0) or `minimax-h3` |
+| `resolution` | COMBO | `1080p` | all | `1080p` / `720p` / `480p`. This sets the price band |
+| `ratio` | COMBO | `adaptive` | all | `adaptive`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` |
+| `duration` | INT | 5 | all | `-1` for smart duration, otherwise 2 to 30 seconds. This sets the length, not the prompt |
+| `audio` | BOOLEAN | true | all | Whether the clip carries an audio track. Pricing is identical either way |
+| `prompt_extend` | BOOLEAN | true | all | Let upstream rewrite the prompt, which usually improves motion. Turn off to stay literal |
+| `seed` | INT | -1 | all | `-1` means "do not send a seed". Any value `>= 0` is forwarded |
+| `first_frame` | IMAGE (optional) | - | keyframe | Image to video, or the first frame of a pair |
+| `last_frame` | IMAGE (optional) | - | keyframe | Pair it with `first_frame` for first/last-frame video |
+| `first_frame_url`, `last_frame_url` | STRING (optional) | empty | keyframe | Hosted image URL, used when the IMAGE input is not connected |
+| `reference_images` | IMAGE (optional) | - | reference | A batch of up to 10 reference images |
+| `reference_image_urls` | STRING (multiline, optional) | empty | reference | Extra reference images, one URL or data URI per line |
+| `reference_video_urls` | STRING (multiline, optional) | empty | reference | Reference videos (mp4/mov), one URL per line, up to 5, 15s in total |
+| `reference_audio_urls` | STRING (multiline, optional) | empty | reference | Reference audio (wav/mp3), one URL per line, up to 5, 15s in total |
+| `file_url` | STRING (optional) | empty | reference | Document URL: pdf, docx, doc, pptx, ppt, xlsx, xls, txt, md, key, pages, numbers |
+| `link_url` | STRING (optional) | empty | reference | A public web page URL |
+| `extra_json` | STRING (multiline, optional) | empty | all | Extra request fields, merged into the body last |
 
 | Output | Type | Notes |
 | --- | --- | --- |
@@ -79,6 +91,25 @@ Category: `vergora`
 
 The node is registered as an output node and returns the clip as a preview result, so ComfyUI will
 not complain that the workflow has no output node.
+
+## Modes and mutual exclusivity
+
+The media fields you send decide which capability runs:
+
+| Media fields sent | Capability |
+| --- | --- |
+| none (prompt only) | text to video |
+| `first_frame` and/or `last_frame` | image to video (keyframe mode) |
+| `reference_images` / `reference_videos` / `reference_audios` / `file` / `link` | reference to video (reference mode) |
+
+- Keyframe mode and reference mode **cannot be mixed** in one request.
+- `file` and `link` **cannot be sent together**.
+- At least one of `prompt`, a keyframe field or a reference field must be present.
+- Images (`first_frame`, `last_frame`, `reference_images`) accept a public URL, a `data:` URI or bare Base64; `reference_videos` and `reference_audios` are URL only.
+- Limits: images up to 20 MB each with side 240–8000 px and ratio ≤ 8:1; videos mp4/mov up to 100 MB, 1–15 s each and 15 s in total; audio wav/mp3 up to 15 MB, 1–15 s each and 15 s in total. With a video input, input plus output duration must stay within 30 s.
+
+The node enforces all of this locally, so a malformed request fails immediately instead of failing
+upstream after you have waited for a queue.
 
 ## Usage
 
@@ -101,13 +132,17 @@ The Vergora video API is an asynchronous task API with an OpenAI-Sora-style shap
 
 | Step | Call |
 | --- | --- |
-| Submit | `POST {BASE_URL}/videos` with `{model, prompt, duration, seed?, first_frame?, last_frame?}` → `{"task_info": {"id": "...", "status": "pending"}}` |
+| Submit | `POST {BASE_URL}/videos` with `{model, prompt?, resolution, ratio, duration, audio, prompt_extend, seed?, first_frame?, last_frame?, reference_images?, reference_videos?, reference_audios?, file?, link?}` → `{"task_info": {"id": "...", "status": "pending"}}` |
 | Poll | `GET {BASE_URL}/videos/{id}` → `{"task_info": {"status": "pending\|processing\|completed\|failed"}, "videos": ["https://.../result_00.mp4"]}` |
 | Download | `GET videos[0]` |
 
 The request body must contain at least one of `prompt`, a keyframe field (`first_frame`,
 `last_frame`) or a reference field (`reference_images`, `reference_videos`, `reference_audios`,
 `file`, `link`). Additional fields are passed through with `extra_json`.
+
+Field names, enums and limits match the upstream Alibaba W3.0 contract documented at
+<https://www.mulerouter.ai/docs/api-reference/endpoint/alibaba/w3.0-video/generation>; the node adds
+the local validation described above on top of it.
 
 Two implementation details worth knowing if you fork this:
 
@@ -118,10 +153,20 @@ Two implementation details worth knowing if you fork this:
 
 ## Cost
 
-Video is billed by duration. When this node was written (2026-10-14) the Vergora catalog listed
-`w3.0-video` at **0.08 USD per second** (0.10 USD official price), so a 5 second clip costs about
-0.40 USD and a 30 second clip about 2.40 USD. Check your platform's current pricing before running
-long clips — the node itself does not meter anything.
+Billing is **resolution unit price × billed seconds**, where the billed duration is the length of
+any reference video input plus the length of the generated clip:
+
+| Resolution | Unit price |
+| --- | --- |
+| 480p | 0.050 USD / second |
+| 720p | 0.100 USD / second |
+| 1080p (default) | 0.200 USD / second |
+
+So a 5 second 1080p clip is roughly 1.00 USD, and the same clip at 720p roughly 0.50 USD. Failed
+tasks are not billed, and `audio: false` does not lower the price. These are the upstream
+Alibaba W3.0 rates (checked 2026-10-14); a reseller such as Vergora may quote a different rate in
+your console — including a flat per-second price — so confirm what you are actually charged before
+running long clips. The node itself does not meter anything.
 
 ## Troubleshooting
 
@@ -133,6 +178,10 @@ long clips — the node itself does not meter anything.
 | `400 prompt is required` | Neither a prompt nor a frame was supplied |
 | `524` | The platform edge timed out. Video generation is asynchronous, so this normally means a platform-side hiccup; retry |
 | Stuck on `pending` / `processing` | Upstream queue. The node waits up to `TIMEOUT` seconds (default 1200) and then tells you how to query the task by hand |
+| `关键帧模式与参考模式互斥` / "mutually exclusive" | `first_frame` / `last_frame` were combined with a reference field |
+| `file 与 link 不能同时使用` | Send only one of `file` and `link` |
+| `reference_images 最多 10 个` | Array limits are 10 images, 5 videos, 5 audios |
+| `duration 只能是 -1 ...` | `duration` must be `-1` (smart duration) or between 2 and 30 |
 
 ## Notes and limitations
 
@@ -163,8 +212,9 @@ MIT. See `LICENSE`.
 # 中文说明
 
 **ComfyUI Vergora Wan 3.0 视频节点**：通过 Vergora API 调用 **Wan 3.0**（模型名 `w3.0-video`）
-在 ComfyUI 里生成视频。一个节点覆盖三种用法——文生视频、图生视频（首帧）、首尾帧视频；提交、
-轮询、下载全自动，出片后直接显示在结果面板里。同一个节点也能选 `minimax-h3`。
+在 ComfyUI 里生成视频。一个节点覆盖三类用法——文生视频、图生视频（关键帧模式）、参考生视频
+（参考模式）；提交、轮询、下载全自动，出片后直接显示在结果面板里。参数与官方 W3.0 契约一致，
+并且提交前会在本地把不合法的请求拦下来，不会白等一次失败任务。同一个节点也能选 `minimax-h3`。
 
 **安装**：把整个文件夹放进 ComfyUI 的 `custom_nodes` 目录 → 把 `config.ini.example` 复制一份
 改名为 `config.ini`（Windows：`copy config.ini.example config.ini`），在 `[API]` 的 `KEY` 填上你的
@@ -172,21 +222,40 @@ MIT. See `LICENSE`.
 `config.ini.example` 里每一项都有注释说明；也可以用环境变量 `VERGORA_BASE_URL` / `VERGORA_API_KEY`，
 优先级高于配置文件。`config.ini` 已被 `.gitignore` 忽略，密钥不会被提交。
 
-**三种接法**
+**三种模式**（发哪些媒体字段，决定用哪种能力）
 
-- 文生视频：只填 `prompt`，`duration` 是时长（秒，1 到 30），点运行
-- 图生视频：把图片接到 `first_frame`（或者用 `first_frame_url` 直接给图片链接）
-- 首尾帧：`first_frame` 和 `last_frame` 都接上
+- 文生视频：只填 `prompt`
+- 图生视频（关键帧模式）：图片接到 `first_frame`，只给尾帧也可以；两个都接就是首尾帧
+- 参考生视频（参考模式）：`reference_images`（一批图，最多 10 张，可直接接图像节点）或
+  `reference_image_urls`（一行一个链接）、`reference_video_urls`（最多 5 个，合计不超过 15 秒）、
+  `reference_audio_urls`（最多 5 个，合计不超过 15 秒）、`file_url`（pdf/docx/pptx 等文档）、
+  `link_url`（公开网页）。参考模式下提示词里可以用 `Image 1`、`Video 1` 指代输入素材
+
+**关键约束**：关键帧模式和参考模式**不能混用**；`file` 与 `link` 也**不能同时发**。这些节点会在
+本地直接报错拦下，不会带着错请求去排队。
 
 **参数要点**
 
-- 片子长短只由 `duration` 决定，提示词里写"30 秒"不会改变时长
-- `seed` 填 `-1` 表示不传种子、让上游随机；填具体数字会原样传给上游
-- 其它参数（例如分辨率）可以用 `extra_json` 透传，格式是 JSON 对象
+- `resolution`：`1080p`（默认）/ `720p` / `480p`，这一项直接决定单价
+- `ratio`：`adaptive`（默认，由内容和素材推断）或 `16:9`、`4:3`、`1:1`、`3:4`、`9:16`
+- `duration`：`-1` 表示智能时长，否则 2 到 30 秒；片子长短只由它决定，提示词里写"30 秒"不会改变时长
+- `audio`：是否输出音轨，开或关价格一样
+- `prompt_extend`：是否让上游改写（扩写）提示词，默认开启，通常动作和运镜更好；关掉更贴近原话
+- `seed`：填 `-1` 表示不传种子、让上游随机；填具体数字（0 到 2147483647）会原样传给上游
+- 其它字段可以用 `extra_json` 透传，格式是 JSON 对象
 - 输出：`video_path`（本地 mp4 路径）、`task_id`、`video_url`；文件存到 ComfyUI 的输出目录
 
-**费用**：视频按时长计费。撰写本节点时（2026-10-14）平台价目表里 `w3.0-video` 是
-**0.08 美元/秒**（官方价 0.10），5 秒约 0.40 美元，30 秒约 2.40 美元。跑长片段前请自行确认当日价格。
+**费用**：按"分辨率单价 × 计费秒数"计费，计费秒数 = 参考视频输入时长 + 输出视频时长。
+
+| 分辨率 | 单价 |
+| --- | --- |
+| 480p | 0.050 美元/秒 |
+| 720p | 0.100 美元/秒 |
+| 1080p（默认） | 0.200 美元/秒 |
+
+5 秒 1080p 约 1.00 美元，同样 5 秒的 720p 约 0.50 美元。失败任务不计费，`audio: false` 也不会降价。
+以上是上游阿里 W3.0 的官方价（核对于 2026-10-14）；中转平台（如 Vergora）在你的控制台里可能显示
+另一套口径，甚至是一个按时长统一的单价（例如 0.08 美元/秒），**以你实际账单为准**，跑长片前先确认。
 
 **已知行为**：轮询请求不能带 `Content-Type`（否则网关会解析空 body 并报 400）；轮询期间的偶发
 网关错误会自动重试，不会把已经在跑的任务丢掉。返回的视频链接是临时 CDN 地址，节点会立刻下载，
