@@ -1,5 +1,37 @@
 # Changelog
 
+## 0.2.1 - 2026-10-15
+
+Robustness work driven by testing against a live platform: channel quirks, large inline images,
+flaky networks and a few error messages that used to be unreadable.
+
+Added
+
+- The node fits the request to the channel that actually serves the model. `minimax-h3` accepts only
+  `16:9`, `9:16` and `1:1`, so `adaptive` is replaced by `16:9` (the swap is logged) and any other
+  unsupported ratio is refused before the request leaves the machine.
+- `minimax-h3` is image-driven on that channel, so a text-only request is refused locally with an
+  explanation instead of spending a queue slot on a job the upstream will reject
+  (`缺少必填参数：ref_image_0`).
+- The canvas progress bar follows the upstream's own percentage when the channel reports one
+  (`progress` / `progress_text` in the task payload), falling back to a time-based estimate.
+- Example workflows: `examples/text-to-video.json`, `examples/image-to-video.json`,
+  `examples/reference-to-video.json` and `examples/minimax-h3-reference.json`.
+- Downloads are verified. A stalled transfer is retried up to three times, partial data is written
+  to a `.part` file and never reported as success, and a final failure carries the video URL so the
+  clip can be fetched by hand.
+
+Fixed
+
+- Inline images are budgeted and compressed (PNG when it fits, JPEG or a smaller resolution when it
+  does not) with the budget split across every frame being sent, keeping the request body inside the
+  gateway's ~1 MB limit. This was the cause of `413 Request Entity Too Large`.
+- Dropped TLS connections (`SSLError`, `UNEXPECTED_EOF_WHILE_READING`) are explained instead of
+  surfacing a raw requests traceback. Submits are deliberately **not** retried automatically, since a
+  duplicate job could be billed twice; polling is still retried five times.
+- `402 Insufficient balance` reports the required and available credits.
+- `400` parameter rejections and `503 No available channel` errors now state what to change.
+
 ## 0.2.0 - 2026-10-14
 
 Breaking change: the node now exposes the full W3.0 parameter set, and the widget list grew in the
