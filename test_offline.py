@@ -200,7 +200,7 @@ def main():
     expect_error(dict(base, model="minimax-h3", prompt="x", ratio="16:9"), "必须给一张图", node)
     # an explicitly rejected resolution is stopped before submitting, not after a 40s failure
     expect_error(dict(base, model="minimax-h3", prompt="x", ratio="16:9", resolution="720p",
-                      reference_images=batch), "不接受分辨率", node)
+                      reference_images=batch), "minimax-h3 不支持 720p，请改用 1080p", node)
     STATE["polls"] = 0
     call(node, model="minimax-h3", prompt="x", resolution="1080p", ratio="16:9",
          duration=5, audio=True, prompt_extend=True, seed=-1, reference_images=batch)

@@ -440,9 +440,8 @@ def build_payload(prompt, model, duration, seed, resolution, ratio, audio, promp
     blocked = MODEL_RESOLUTION_BLOCKLIST.get(str(model)) or {}
     if resolution in blocked:
         raise RuntimeError(
-            "%s 不接受分辨率 %s，上游会直接回 invalid_resolution / %s rejects resolution %s. "
-            "请把 resolution 改成 %s（2026-10-15 实测可用），或改用 w3.0-video（支持 480p/720p/1080p，"
-            "按秒计费，测试更省）。" % (model, resolution, model, resolution, blocked[resolution])
+            "%s 不支持 %s，请改用 %s。 / %s does not support %s, please use %s."
+            % (model, resolution, blocked[resolution], model, resolution, blocked[resolution])
         )
 
     payload = {
