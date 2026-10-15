@@ -4,18 +4,11 @@ A ComfyUI custom node that generates video with **Wan 3.0** (`w3.0-video`) throu
 Text-to-video, image-to-video and first/last-frame video all live in one node: the request is
 submitted, polled and downloaded for you, and the finished clip shows up in the ComfyUI result panel.
 
-- **Model:** `w3.0-video` (Wan 3.0, provider listed as `alibaba` in the Vergora model catalog).
-  A second model, `minimax-h3`, is selectable from the same node, but it is **not enabled for every
-  API key** — if yours lacks a channel for it the gateway answers `503 No available channel`. Keep
-  `w3.0-video` unless you know your key can reach the other one.
-  When `minimax-h3` is available it is served by a Seedance 2.0 channel that only accepts the
-  `16:9`, `9:16` and `1:1` ratios, so `adaptive` is rejected there; `w3.0-video` accepts all six
-  ratios plus `adaptive`.
-  With a model whose channel has a narrowed ratio set, the node replaces `adaptive` with `16:9` and
-  logs it, and refuses any other unsupported ratio locally before the request is sent.
-  That channel is also image-driven: it needs a reference image, so a text-only `minimax-h3` job is
-  refused locally (the upstream would answer `缺少必填参数：ref_image_0`). Use `w3.0-video` when you
-  want to generate purely from text.
+- **Model:** `w3.0-video` (Wan 3.0, provider listed as `alibaba` in the Vergora model catalog),
+  with the full W3.0 parameter set: all six ratios plus `adaptive`, `480p` / `720p` / `1080p`,
+  text prompts, keyframes, reference media and documents.
+  The other video model, `minimax-h3`, has different rules (it is image-driven, accepts only three
+  ratios and one resolution), so it lives in its own package: **ComfyUI-Vergora-Minimax-h3**.
 - **Modes:** text to video, image to video (first and/or last frame), and reference to video
   (reference images, videos, audio, documents, or a web link).
 - **Full parameter set:** resolution, aspect ratio, duration, audio on/off, prompt rewriting and
@@ -75,7 +68,7 @@ Category: `vergora`
 | Input | Type | Default | Mode | Notes |
 | --- | --- | --- | --- | --- |
 | `prompt` | STRING (multiline) | empty | all | What the clip should show, up to 20000 characters. In reference mode you can address inputs as `Image 1`, `Video 1` |
-| `model` | COMBO | `w3.0-video` | all | `w3.0-video` (Wan 3.0) or `minimax-h3` |
+| `model` | COMBO | `w3.0-video` | all | `w3.0-video` (Wan 3.0). `minimax-h3` moved to the sibling pack ComfyUI-Vergora-Minimax-h3 |
 | `resolution` | COMBO | `1080p` | all | `1080p` / `720p` / `480p`. This sets the price band |
 | `ratio` | COMBO | `adaptive` | all | `adaptive`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` |
 | `duration` | INT | 5 | all | `-1` for smart duration, otherwise 2 to 30 seconds. This sets the length, not the prompt |
@@ -157,7 +150,6 @@ The `examples/` folder ships three workflows you can load as-is:
 | `examples/text-to-video.json` | The node on its own, with a sample prompt |
 | `examples/image-to-video.json` | A `LoadImage` node wired into `first_frame` |
 | `examples/reference-to-video.json` | A `LoadImage` node wired into `reference_images` |
-| `examples/minimax-h3-reference.json` | `minimax-h3` with a `LoadImage` wired into `reference_images`; that channel needs an image, and this file already sets `ratio` to `16:9` so it runs as-is |
 
 Load one through **Workflow → Open**, or drag the `.json` straight onto the canvas. The two image
 examples point at `example.png`, which does not exist on your machine — click the loader and pick any
@@ -211,14 +203,12 @@ running long clips. The node itself does not meter anything.
 | Symptom | Cause |
 | --- | --- |
 | `没有配置 API key` | `KEY` is empty in `config.ini` and `VERGORA_API_KEY` is not set |
-| `503 No available channel for model xxx` | This key has no channel for that model. Switch the `model` widget back to `w3.0-video`, or ask the platform to enable the model for your key. `minimax-h3` in particular is listed by the platform but is not enabled for every key |
-| `400 invalid_request` mentioning a ratio (for example `ratio 只支持 16:9、9:16、1:1`) | The backend serving your selected model accepts fewer ratios than `w3.0-video` does. `minimax-h3` is currently served by a Seedance 2.0 channel that only takes `16:9`, `9:16` and `1:1`. The node now covers this: `adaptive` is switched to `16:9` automatically (it logs the change), and an explicitly unsupported ratio such as `4:3` is refused locally instead of being sent |
+| `503 No available channel for model xxx` | This key has no channel for that model. Ask the platform to enable it for your key |
+| `400 invalid_request` | The upstream rejected a parameter; the message states which one and its allowed values |
 | `402 Insufficient balance` | The request costs more credits than the account holds. The message states the required and available amounts; top up, or lower `resolution` / `duration` |
-| Task fails with `缺少必填参数：ref_image_0` (any "ref_image" wording) | That model's channel is image-driven. `minimax-h3` needs a reference image, so a text-only job cannot work there: connect an `IMAGE` to `reference_images` (or fill `reference_image_urls`), or use `w3.0-video` for text-to-video. The node now refuses a text-only request for such a model locally instead of burning a queue slot |
 | The job completes but the saved file is 0 bytes | The CDN dropped the transfer. The node verifies the download, retries three times, and only then raises an error that contains the video URL so you can fetch it by hand |
 | `413 Request Entity Too Large` | The inline image pushed the request body past the gateway's limit (nginx defaults to 1 MB). The node now budgets and compresses local images automatically; if it still happens, use `reference_image_urls` with a hosted image, or ask the platform to raise `client_max_body_size` |
 | `SSLError`, `UNEXPECTED_EOF_WHILE_READING` or `Max retries exceeded` | The TLS connection to the gateway was cut, which is almost always a local proxy or VPN hiccup rather than a parameter problem. Submits are deliberately **not** retried automatically (a duplicate job could be billed twice) — press Run again. Polling is retried five times before giving up |
-| `invalid_resolution` (`model ... does not support resolution 720p`) | The channel behind that model accepts a different resolution set than `w3.0-video` does. Verified 2026-10-15: `minimax-h3` accepts `1080p` and rejects `720p`. A combo widget cannot be filtered per model, so the node now stops this combination **before submitting** and tells you to pick `1080p` — you get the message the moment you press Run instead of after a failed job. Note `minimax-h3` is billed per request, so resolution does not change its price; for cheap tests use `w3.0-video` with `480p` |
 | `401` | Wrong or expired key |
 | `400 prompt is required` | Neither a prompt nor a frame was supplied |
 | `524` | The platform edge timed out. Video generation is asynchronous, so this normally means a platform-side hiccup; retry |
@@ -272,7 +262,10 @@ MIT. See `LICENSE`.
 **ComfyUI Vergora Wan 3.0 视频节点**：通过 Vergora API 调用 **Wan 3.0**（模型名 `w3.0-video`）
 在 ComfyUI 里生成视频。一个节点覆盖三类用法——文生视频、图生视频（关键帧模式）、参考生视频
 （参考模式）；提交、轮询、下载全自动，出片后直接显示在结果面板里。参数与官方 W3.0 契约一致，
-并且提交前会在本地把不合法的请求拦下来，不会白等一次失败任务。同一个节点也能选 `minimax-h3`。
+并且提交前会在本地把不合法的请求拦下来，不会白等一次失败任务。
+
+> 另一个视频模型 **minimax-h3** 的规则完全不同（必须有参考图、只支持三种画幅和一种分辨率），
+> 所以它拆成了独立包 **ComfyUI-Vergora-Minimax-h3**，两个包可以同时安装、互不影响。
 
 **安装**：把整个文件夹放进 ComfyUI 的 `custom_nodes` 目录 → 把 `config.ini.example` 复制一份
 改名为 `config.ini`（Windows：`copy config.ini.example config.ini`），在 `[API]` 的 `KEY` 填上你的

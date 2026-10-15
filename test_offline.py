@@ -187,24 +187,12 @@ def main():
     # ---- contract validation, caught before anything is billed ----
     base = dict(model="w3.0-video", resolution="1080p", ratio="adaptive",
                 duration=5, audio=True, prompt_extend=True, seed=-1)
-    # models with a narrowed ratio set: adaptive falls back, an unsupported fixed ratio is refused
-    STATE["polls"] = 0
-    call(node, model="minimax-h3", prompt="x", resolution="480p", ratio="adaptive",
-         duration=5, audio=True, prompt_extend=True, seed=-1, reference_images=batch)
-    assert STATE["payload"]["ratio"] == "16:9", STATE["payload"]
-    call(node, model="minimax-h3", prompt="x", resolution="480p", ratio="9:16",
-         duration=5, audio=True, prompt_extend=True, seed=-1, reference_images=batch)
-    assert STATE["payload"]["ratio"] == "9:16", STATE["payload"]
-    expect_error(dict(base, model="minimax-h3", prompt="x", ratio="4:3"), "只支持", node)
-    # this channel is image-driven: text only must be refused locally
-    expect_error(dict(base, model="minimax-h3", prompt="x", ratio="16:9"), "必须给一张图", node)
-    # an explicitly rejected resolution is stopped before submitting, not after a 40s failure
-    expect_error(dict(base, model="minimax-h3", prompt="x", ratio="16:9", resolution="720p",
-                      reference_images=batch), "minimax-h3 不支持 720p，请改用 1080p", node)
-    STATE["polls"] = 0
-    call(node, model="minimax-h3", prompt="x", resolution="1080p", ratio="16:9",
-         duration=5, audio=True, prompt_extend=True, seed=-1, reference_images=batch)
-    assert STATE["payload"]["resolution"] == "1080p", STATE["payload"]
+    # every ratio and resolution the W3.0 contract allows must pass straight through
+    for ratio in ("adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"):
+        STATE["polls"] = 0
+        call(node, model="w3.0-video", prompt="x", resolution="480p", ratio=ratio,
+             duration=5, audio=True, prompt_extend=True, seed=-1, reference_images=batch)
+        assert STATE["payload"]["ratio"] == ratio, STATE["payload"]
     expect_error(dict(base, prompt=""), "至少要给", node)
     expect_error(dict(base, prompt="x", first_frame=image,
                       reference_video_urls="https://example.com/v.mp4"),
@@ -233,11 +221,11 @@ def main():
     # ---- known gateway errors get an actionable hint ----
     nodes.http_post_json = lambda url, headers, payload, timeout=120: (
         503, '{"error":{"code":"model_not_found","message":"No available channel for model '
-             'minimax-h3 under group minimax-h3 (distributor)"}}')
+             'w3.0-video under group retail (distributor)"}}')
     try:
-        nodes.submit_task(nodes.load_config(), {"model": "minimax-h3", "prompt": "x"})
+        nodes.submit_task(nodes.load_config(), {"model": "w3.0-video", "prompt": "x"})
     except RuntimeError as exc:
-        assert "w3.0-video" in str(exc) and "minimax-h3" in str(exc), exc
+        assert "w3.0-video" in str(exc) and "没有可用通道" in str(exc), exc
     else:
         raise AssertionError("a missing channel should raise")
 
@@ -262,10 +250,9 @@ def main():
         raise AssertionError("an insufficient balance should raise")
 
     nodes.http_post_json = lambda url, headers, payload, timeout=120: (
-        400, '{"code":"invalid_request","message":"seedance2.0批发通道二 ratio 只支持 16:9、9:16、1:1",'
-             '"data":null}')
+        400, '{"code":"invalid_request","message":"ratio 只支持 16:9、9:16、1:1","data":null}')
     try:
-        nodes.submit_task(nodes.load_config(), {"model": "minimax-h3", "prompt": "x"})
+        nodes.submit_task(nodes.load_config(), {"model": "w3.0-video", "prompt": "x"})
     except RuntimeError as exc:
         assert "16:9" in str(exc) and "adaptive" in str(exc), exc
     else:
@@ -277,25 +264,19 @@ def main():
     message = nodes.explain_task_failure(failed, "")
     assert "素材" in message and "Base64" in message, message
 
-    # nested error shape + the reference-image requirement
-    nested = {"task_info": {"status": "failed"},
-              "data": {"error": {"code": "task_failed", "message": "缺少必填参数：ref_image_0"}}}
-    message = nodes.explain_task_failure(nested, "")
-    assert "参考图" in message and "w3.0-video" in message, message
-
     # the other failure shape: fail_reason carries the reason as a JSON string
     upstream_fail = {
         "task_info": {"status": "failed"},
         "data": {
             "status": "failed", "progress": 100,
             "fail_reason": '{"code":"invalid_resolution","data":null,"message":'
-                           '"model minimax-h3-f does not support resolution 720p"}',
+                           '"model does not support resolution 720p"}',
         },
     }
     code, detail = nodes.extract_failure_reason(upstream_fail)
     assert code == "invalid_resolution" and "720p" in detail, (code, detail)
-    message = nodes.explain_task_failure(upstream_fail, "")
-    assert "1080p" in message and "480p" in message, message
+    # an unknown reason is still surfaced verbatim rather than swallowed
+    assert "720p" in nodes.explain_task_failure(upstream_fail, '{"raw":"...720p..."}')
 
     # the upstream's own progress must drive the canvas bar
     class FakeProgress:
@@ -351,18 +332,6 @@ def main():
     else:
         raise AssertionError("a network error should raise")
     assert calls["n"] == 1, "a submit must not be retried automatically (could double-bill)"
-
-    # the same rules are surfaced through input validation, which ComfyUI shows in the
-    # node's own error panel instead of the generic "node failed" toast
-    check = nodes.VergoraVideoGenerator.VALIDATE_INPUTS
-    assert check(model="minimax-h3", resolution="720p", reference_images=["x"]) == (
-        "minimax-h3 不支持 720p，请改用 1080p。 / "
-        "minimax-h3 does not support 720p, please use 1080p.")
-    assert check(model="minimax-h3", resolution="1080p", reference_images=["x"]) is True
-    assert "需要一张参考图" in check(model="minimax-h3", resolution="1080p")
-    assert check(model="minimax-h3", resolution="1080p", reference_image_urls=" https://e.invalid/a.png ") is True
-    assert check(model="w3.0-video", resolution="720p") is True
-    assert check(model="w3.0-video", resolution="1080p", reference_image_urls=["link"]) is True
 
     print("OK 全部通过 / all checks passed")
     print("  submit url :", STATE["post_url"])

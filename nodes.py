@@ -71,34 +71,15 @@ CONFIG_PATH = os.path.join(HERE, "config.ini")
 
 DEFAULT_BASE_URL = "https://api.vergora.ai/v1"
 
-# w3.0-video is Alibaba Wan 3.0. w3.0-video-pro is the sibling that adds 2k/4k.
-VIDEO_MODELS = ["w3.0-video", "minimax-h3"]
+# w3.0-video is Alibaba Wan 3.0. The sibling pack ComfyUI-Vergora-Minimax-h3 covers
+# minimax-h3, which is a different model with a different parameter set.
+VIDEO_MODELS = ["w3.0-video"]
 RESOLUTIONS = ["1080p", "720p", "480p"]
 RATIOS = ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"]
 
 MAX_REFERENCE_IMAGES = 10
 MAX_REFERENCE_VIDEOS = 5
 MAX_REFERENCE_AUDIOS = 5
-
-# Some models are served by an upstream channel that accepts fewer ratios than the
-# W3.0 contract does. Observed 2026-10-15: minimax-h3 is routed through a Seedance
-# 2.0 channel that rejects "adaptive" and only takes these three.
-MODEL_RATIO_LIMITS = {
-    "minimax-h3": ["16:9", "9:16", "1:1"],
-}
-
-# Channels that need an image input. Observed 2026-10-15: the minimax-h3 route is a
-# reference-to-video channel and answers "缺少必填参数：ref_image_0" for text-only jobs.
-MODEL_REQUIRES_IMAGE = {
-    "minimax-h3": "reference_images",
-}
-
-# Resolutions a channel rejects outright. Observed 2026-10-15: minimax-h3 fails with
-# invalid_resolution for "720p" while "1080p" succeeds. The combo widget cannot be
-# filtered per model, so the node stops the run here and says what to pick instead.
-MODEL_RESOLUTION_BLOCKLIST = {
-    "minimax-h3": {"720p": "1080p"},
-}
 
 CATEGORY = "vergora"
 
@@ -402,21 +383,6 @@ def validate_request(prompt, first_frame, last_frame, reference_images,
                            "(smart duration) or 2 to 30 seconds")
 
 
-def reconcile_ratio(model, ratio):
-    """Fit the requested ratio to what the model's channel actually accepts."""
-    allowed = MODEL_RATIO_LIMITS.get(str(model))
-    if not allowed or ratio in allowed:
-        return ratio
-    if ratio == "adaptive":
-        log("[vergora] %s 不支持 adaptive，已自动改用 %s / %s does not accept 'adaptive', "
-            "switched to %s" % (model, allowed[0], model, allowed[0]))
-        return allowed[0]
-    raise RuntimeError(
-        "%s 只支持 %s，不支持 %s / %s only supports %s"
-        % (model, " / ".join(allowed), ratio, model, " / ".join(allowed))
-    )
-
-
 def build_payload(prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
                   first_frame=None, last_frame=None,
                   reference_images=None, reference_videos=None, reference_audios=None,
@@ -429,20 +395,6 @@ def build_payload(prompt, model, duration, seed, resolution, ratio, audio, promp
 
     validate_request(prompt, first_frame, last_frame, reference_images,
                      reference_videos, reference_audios, file_url, link_url, duration)
-    ratio = reconcile_ratio(model, ratio)
-    # `reference_images` here is already the merged list from the IMAGE batch and the URL lines
-    if MODEL_REQUIRES_IMAGE.get(str(model)) and not (reference_images or first_frame or last_frame):
-        raise RuntimeError(
-            "%s 的通道目前只支持参考图/首帧生视频，必须给一张图 / %s currently needs an image input: "
-            "把图片接到 reference_images（或 reference_image_urls、first_frame），"
-            "纯文生视频请改用 w3.0-video。" % (model, model)
-        )
-    blocked = MODEL_RESOLUTION_BLOCKLIST.get(str(model)) or {}
-    if resolution in blocked:
-        raise RuntimeError(
-            "%s 不支持 %s，请改用 %s。 / %s does not support %s, please use %s."
-            % (model, resolution, blocked[resolution], model, resolution, blocked[resolution])
-        )
 
     payload = {
         "model": model,
@@ -596,14 +548,6 @@ def explain_task_failure(data, text):
     """Add a hint to an upstream task failure when the reason is a known trap."""
     code, detail = extract_failure_reason(data)
     lower = ("%s %s" % (code, detail)).lower()
-    if "invalid_resolution" in lower or "does not support resolution" in lower:
-        return ("任务失败：这个模型不接受该分辨率 / this model rejects that resolution "
-                "（上游原话：“%s”）。minimax-h3 目前只接受 1080p（2026-10-15 实测成功，720p 会被拒绝）；"
-                "它按请求计费、改分辨率不省钱，想省钱地测请用 w3.0-video + 480p。" % detail)
-    if "ref_image" in lower or "缺少必填参数" in detail:
-        return ("任务失败：这个模型的通道要求提供参考图 / this channel requires a reference image "
-                "（上游原话：“%s”）。把图片接到 reference_images，或把图片链接填进 "
-                "reference_image_urls；只想用文字生成视频请改用 w3.0-video。" % detail)
     if "failed to download file" in lower:
         return ("任务失败：上游下载不到你提供的素材链接 / the upstream could not fetch your media URL. "
                 "多半是链接已过期或对它不可达——把图片接到 IMAGE 输入上（节点会转成 Base64 发送），"
@@ -849,41 +793,6 @@ class VergoraVideoGenerator:
                                           "tooltip": "Extra request fields, e.g. {\"duration\": 10}"}),
             },
         }
-
-    @classmethod
-    def VALIDATE_INPUTS(cls, **kwargs):
-        """Run the pre-flight rules as *input validation*.
-
-        ComfyUI renders a validation failure in the node's own error panel (the same
-        place it reports "invalid input"), whereas a runtime exception only shows the
-        generic "node failed" toast with the real text hidden in the details pane and
-        the console. The same rules stay enforced in build_payload, so this is the
-        visible layer, not the only one.
-        """
-
-        def present(key):
-            value = kwargs.get(key)
-            if isinstance(value, str):
-                return bool(value.strip())
-            return bool(value)
-
-        try:
-            model = str(kwargs.get("model") or "")
-            resolution = str(kwargs.get("resolution") or "")
-            blocked = MODEL_RESOLUTION_BLOCKLIST.get(model) or {}
-            if resolution in blocked:
-                return ("%s 不支持 %s，请改用 %s。 / %s does not support %s, please use %s."
-                        % (model, resolution, blocked[resolution], model, resolution, blocked[resolution]))
-            if MODEL_REQUIRES_IMAGE.get(model) and not any(
-                    present(key) for key in ("reference_images", "reference_image_urls",
-                                             "first_frame", "first_frame_url",
-                                             "last_frame", "last_frame_url")):
-                return ("%s 需要一张参考图，请接到 reference_images 或填 reference_image_urls。 / "
-                        "%s needs an image input: connect one to reference_images or fill "
-                        "reference_image_urls." % (model, model))
-        except Exception:  # never block a run because validation itself misbehaved
-            return True
-        return True
 
     def run(self, prompt, model, resolution, ratio, duration, audio, prompt_extend, seed,
             first_frame=None, last_frame=None, first_frame_url="", last_frame_url="",

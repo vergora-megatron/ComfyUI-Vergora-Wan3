@@ -1,5 +1,21 @@
 # Changelog
 
+## 0.3.0 - 2026-10-15
+
+Breaking change: `minimax-h3` moved out of this package. It follows a different contract
+(image-driven, three ratios, one verified resolution), so it now ships separately as
+**ComfyUI-Vergora-Minimax-h3**. Both packs can be installed side by side.
+
+The `model` widget stays in place with a single option so existing workflows keep their parameter
+order and stay valid — nothing else about the node changed.
+
+Removed
+
+- The `minimax-h3` entry from the model widget, and the compatibility rules that existed only for
+  it: the `adaptive` to `16:9` ratio fallback, the reference-image requirement and the rejected
+  resolution list. All of that now lives in the Minimax pack.
+- `examples/minimax-h3-reference.json`, which moved to the new package.
+
 ## 0.2.1 - 2026-10-15
 
 Robustness work driven by testing against a live platform: channel quirks, large inline images,
