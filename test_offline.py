@@ -276,6 +276,20 @@ def main():
     message = nodes.explain_task_failure(nested, "")
     assert "参考图" in message and "w3.0-video" in message, message
 
+    # the other failure shape: fail_reason carries the reason as a JSON string
+    upstream_fail = {
+        "task_info": {"status": "failed"},
+        "data": {
+            "status": "failed", "progress": 100,
+            "fail_reason": '{"code":"invalid_resolution","data":null,"message":'
+                           '"model minimax-h3-f does not support resolution 720p"}',
+        },
+    }
+    code, detail = nodes.extract_failure_reason(upstream_fail)
+    assert code == "invalid_resolution" and "720p" in detail, (code, detail)
+    message = nodes.explain_task_failure(upstream_fail, "")
+    assert "1080p" in message and "480p" in message, message
+
     # the upstream's own progress must drive the canvas bar
     class FakeProgress:
         def __init__(self):

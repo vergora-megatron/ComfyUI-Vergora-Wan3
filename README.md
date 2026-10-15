@@ -218,6 +218,7 @@ running long clips. The node itself does not meter anything.
 | The job completes but the saved file is 0 bytes | The CDN dropped the transfer. The node verifies the download, retries three times, and only then raises an error that contains the video URL so you can fetch it by hand |
 | `413 Request Entity Too Large` | The inline image pushed the request body past the gateway's limit (nginx defaults to 1 MB). The node now budgets and compresses local images automatically; if it still happens, use `reference_image_urls` with a hosted image, or ask the platform to raise `client_max_body_size` |
 | `SSLError`, `UNEXPECTED_EOF_WHILE_READING` or `Max retries exceeded` | The TLS connection to the gateway was cut, which is almost always a local proxy or VPN hiccup rather than a parameter problem. Submits are deliberately **not** retried automatically (a duplicate job could be billed twice) — press Run again. Polling is retried five times before giving up |
+| Task fails with `invalid_resolution` (`model ... does not support resolution 720p`) | The channel behind that model accepts a different resolution set than `w3.0-video` does. Verified 2026-10-15: `minimax-h3` accepts `1080p` and rejects `720p`. It is billed per request, so lowering the resolution does not save money — for cheap tests use `w3.0-video` with `480p` |
 | `401` | Wrong or expired key |
 | `400 prompt is required` | Neither a prompt nor a frame was supplied |
 | `524` | The platform edge timed out. Video generation is asynchronous, so this normally means a platform-side hiccup; retry |

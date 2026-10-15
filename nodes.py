@@ -545,15 +545,48 @@ def explain_http_error(status, text, model=None):
     return None
 
 
+def extract_failure_reason(data):
+    """Pull (code, message) out of whichever failure shape the channel used.
+
+    Two shapes show up in practice: `task_info.error` / `data.error` objects, and a
+    `data.fail_reason` field that carries the reason as a JSON *string*.
+    """
+    candidates = []
+    for holder in (data.get("task_info"), data.get("data"), data):
+        if not isinstance(holder, dict):
+            continue
+        if isinstance(holder.get("error"), dict):
+            candidates.append(holder["error"])
+        fail = holder.get("fail_reason")
+        if isinstance(fail, dict):
+            candidates.append(fail)
+        elif isinstance(fail, str) and fail.strip().startswith("{"):
+            try:
+                candidates.append(json.loads(fail))
+            except Exception:
+                candidates.append({"message": fail})
+        elif isinstance(fail, str) and fail.strip():
+            candidates.append({"message": fail})
+        for key in ("message", "detail", "title"):
+            value = holder.get(key)
+            if isinstance(value, str) and value.strip():
+                candidates.append({"message": value})
+    for item in candidates:
+        code = str(item.get("code") or "").strip()
+        message = str(item.get("message") or item.get("detail") or item.get("title") or "").strip()
+        if code or message:
+            return code, message
+    return "", ""
+
+
 def explain_task_failure(data, text):
     """Add a hint to an upstream task failure when the reason is a known trap."""
-    error = {}
-    for holder in (data.get("task_info"), data.get("data")):
-        if isinstance(holder, dict) and isinstance(holder.get("error"), dict):
-            error = holder["error"]
-            break
-    detail = str(error.get("message") or error.get("detail") or error.get("title") or "")
-    lower = detail.lower()
+    code, detail = extract_failure_reason(data)
+    lower = ("%s %s" % (code, detail)).lower()
+    if "invalid_resolution" in lower or "does not support resolution" in lower:
+        return ("任务失败：这个模型不接受该分辨率 / this model rejects that resolution "
+                "（上游原话：“%s”）。minimax-h3 目前只接受 1080p（2026-10-15 实测成功，720p 会被拒绝）；"
+                "它按请求计费、改分辨率不省钱，想省钱地测请用 w3.0-video + 480p。" % detail)
     if "ref_image" in lower or "缺少必填参数" in detail:
         return ("任务失败：这个模型的通道要求提供参考图 / this channel requires a reference image "
                 "（上游原话：“%s”）。把图片接到 reference_images，或把图片链接填进 "
