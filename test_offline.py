@@ -198,6 +198,13 @@ def main():
     expect_error(dict(base, model="minimax-h3", prompt="x", ratio="4:3"), "只支持", node)
     # this channel is image-driven: text only must be refused locally
     expect_error(dict(base, model="minimax-h3", prompt="x", ratio="16:9"), "必须给一张图", node)
+    # an explicitly rejected resolution is stopped before submitting, not after a 40s failure
+    expect_error(dict(base, model="minimax-h3", prompt="x", ratio="16:9", resolution="720p",
+                      reference_images=batch), "不接受分辨率", node)
+    STATE["polls"] = 0
+    call(node, model="minimax-h3", prompt="x", resolution="1080p", ratio="16:9",
+         duration=5, audio=True, prompt_extend=True, seed=-1, reference_images=batch)
+    assert STATE["payload"]["resolution"] == "1080p", STATE["payload"]
     expect_error(dict(base, prompt=""), "至少要给", node)
     expect_error(dict(base, prompt="x", first_frame=image,
                       reference_video_urls="https://example.com/v.mp4"),

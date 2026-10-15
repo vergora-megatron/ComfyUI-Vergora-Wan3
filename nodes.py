@@ -93,6 +93,13 @@ MODEL_REQUIRES_IMAGE = {
     "minimax-h3": "reference_images",
 }
 
+# Resolutions a channel rejects outright. Observed 2026-10-15: minimax-h3 fails with
+# invalid_resolution for "720p" while "1080p" succeeds. The combo widget cannot be
+# filtered per model, so the node stops the run here and says what to pick instead.
+MODEL_RESOLUTION_BLOCKLIST = {
+    "minimax-h3": {"720p": "1080p"},
+}
+
 CATEGORY = "vergora"
 
 
@@ -429,6 +436,13 @@ def build_payload(prompt, model, duration, seed, resolution, ratio, audio, promp
             "%s 的通道目前只支持参考图/首帧生视频，必须给一张图 / %s currently needs an image input: "
             "把图片接到 reference_images（或 reference_image_urls、first_frame），"
             "纯文生视频请改用 w3.0-video。" % (model, model)
+        )
+    blocked = MODEL_RESOLUTION_BLOCKLIST.get(str(model)) or {}
+    if resolution in blocked:
+        raise RuntimeError(
+            "%s 不接受分辨率 %s，上游会直接回 invalid_resolution / %s rejects resolution %s. "
+            "请把 resolution 改成 %s（2026-10-15 实测可用），或改用 w3.0-video（支持 480p/720p/1080p，"
+            "按秒计费，测试更省）。" % (model, resolution, model, resolution, blocked[resolution])
         )
 
     payload = {
