@@ -419,6 +419,10 @@ def explain_http_error(status, text, model=None):
                 "去控制台充值，或把 resolution 降到 720p/480p、把 duration 调短后再试。"
                 "Upstream said: %s"
                 % (need.group(1) if need else "?", have.group(1) if have else "?", snippet))
+    if status == 400:
+        return ("上游拒绝了这次请求的参数 / the upstream rejected the request parameters (HTTP 400): %s "
+                "—— 按它给出的限制调整对应控件后重试（例如它只支持 16:9 / 9:16 / 1:1 时，"
+                "就把 ratio 从 adaptive 改成其中之一）。" % snippet)
     if status in (401, 403):
         return ("鉴权失败 / authentication failed (HTTP %s): 检查 config.ini 里的 KEY。"
                 "Upstream said: %s" % (status, snippet))

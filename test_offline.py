@@ -228,6 +228,16 @@ def main():
     else:
         raise AssertionError("an insufficient balance should raise")
 
+    nodes.http_post_json = lambda url, headers, payload, timeout=120: (
+        400, '{"code":"invalid_request","message":"seedance2.0批发通道二 ratio 只支持 16:9、9:16、1:1",'
+             '"data":null}')
+    try:
+        nodes.submit_task(nodes.load_config(), {"model": "minimax-h3", "prompt": "x"})
+    except RuntimeError as exc:
+        assert "16:9" in str(exc) and "adaptive" in str(exc), exc
+    else:
+        raise AssertionError("a rejected parameter should raise")
+
     failed = {"task_info": {"status": "failed", "error": {
         "code": 4002, "title": "Infrastructure operation failed",
         "detail": "Failed to download file: HTTP 502"}}}
