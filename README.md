@@ -157,6 +157,7 @@ The `examples/` folder ships three workflows you can load as-is:
 | `examples/text-to-video.json` | The node on its own, with a sample prompt |
 | `examples/image-to-video.json` | A `LoadImage` node wired into `first_frame` |
 | `examples/reference-to-video.json` | A `LoadImage` node wired into `reference_images` |
+| `examples/minimax-h3-reference.json` | `minimax-h3` with a `LoadImage` wired into `reference_images`; that channel needs an image, and this file already sets `ratio` to `16:9` so it runs as-is |
 
 Load one through **Workflow → Open**, or drag the `.json` straight onto the canvas. The two image
 examples point at `example.png`, which does not exist on your machine — click the loader and pick any
