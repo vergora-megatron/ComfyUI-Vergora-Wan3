@@ -850,6 +850,41 @@ class VergoraVideoGenerator:
             },
         }
 
+    @classmethod
+    def VALIDATE_INPUTS(cls, **kwargs):
+        """Run the pre-flight rules as *input validation*.
+
+        ComfyUI renders a validation failure in the node's own error panel (the same
+        place it reports "invalid input"), whereas a runtime exception only shows the
+        generic "node failed" toast with the real text hidden in the details pane and
+        the console. The same rules stay enforced in build_payload, so this is the
+        visible layer, not the only one.
+        """
+
+        def present(key):
+            value = kwargs.get(key)
+            if isinstance(value, str):
+                return bool(value.strip())
+            return bool(value)
+
+        try:
+            model = str(kwargs.get("model") or "")
+            resolution = str(kwargs.get("resolution") or "")
+            blocked = MODEL_RESOLUTION_BLOCKLIST.get(model) or {}
+            if resolution in blocked:
+                return ("%s 不支持 %s，请改用 %s。 / %s does not support %s, please use %s."
+                        % (model, resolution, blocked[resolution], model, resolution, blocked[resolution]))
+            if MODEL_REQUIRES_IMAGE.get(model) and not any(
+                    present(key) for key in ("reference_images", "reference_image_urls",
+                                             "first_frame", "first_frame_url",
+                                             "last_frame", "last_frame_url")):
+                return ("%s 需要一张参考图，请接到 reference_images 或填 reference_image_urls。 / "
+                        "%s needs an image input: connect one to reference_images or fill "
+                        "reference_image_urls." % (model, model))
+        except Exception:  # never block a run because validation itself misbehaved
+            return True
+        return True
+
     def run(self, prompt, model, resolution, ratio, duration, audio, prompt_extend, seed,
             first_frame=None, last_frame=None, first_frame_url="", last_frame_url="",
             reference_images=None, reference_image_urls="",

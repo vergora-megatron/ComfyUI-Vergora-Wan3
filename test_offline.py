@@ -352,6 +352,18 @@ def main():
         raise AssertionError("a network error should raise")
     assert calls["n"] == 1, "a submit must not be retried automatically (could double-bill)"
 
+    # the same rules are surfaced through input validation, which ComfyUI shows in the
+    # node's own error panel instead of the generic "node failed" toast
+    check = nodes.VergoraVideoGenerator.VALIDATE_INPUTS
+    assert check(model="minimax-h3", resolution="720p", reference_images=["x"]) == (
+        "minimax-h3 不支持 720p，请改用 1080p。 / "
+        "minimax-h3 does not support 720p, please use 1080p.")
+    assert check(model="minimax-h3", resolution="1080p", reference_images=["x"]) is True
+    assert "需要一张参考图" in check(model="minimax-h3", resolution="1080p")
+    assert check(model="minimax-h3", resolution="1080p", reference_image_urls=" https://e.invalid/a.png ") is True
+    assert check(model="w3.0-video", resolution="720p") is True
+    assert check(model="w3.0-video", resolution="1080p", reference_image_urls=["link"]) is True
+
     print("OK 全部通过 / all checks passed")
     print("  submit url :", STATE["post_url"])
     print("  payload    :", sorted(payload.keys()))
