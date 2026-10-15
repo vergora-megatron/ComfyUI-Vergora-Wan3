@@ -230,19 +230,70 @@ def auth_headers(cfg, with_json=True):
 # Image helpers
 # --------------------------------------------------------------------------
 
-def array_to_data_uri(frame):
+# The gateway sits behind nginx with a ~1 MB request body limit, so inline images have
+# to be budgeted: the raw bytes below become ~1.33x that as Base64 inside the JSON body.
+MAX_BODY_IMAGE_BYTES = 550 * 1024
+
+
+def encode_frame(frame, max_bytes):
+    """Encode one frame, shrinking it until the bytes fit max_bytes."""
     if Image is None:
         raise RuntimeError("需要 Pillow 才能把 IMAGE 转成图片 / Pillow is required to encode IMAGE tensors")
     arr = np.asarray(frame)
     if arr.ndim == 4:
         arr = arr[0]
-    arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
+    if arr.dtype != np.uint8:
+        arr = np.clip(arr * 255.0, 0, 255).astype(np.uint8)
+    image = Image.fromarray(arr)
+    if image.mode != "RGB":
+        image = image.convert("RGB")
+
     buffer = BytesIO()
-    Image.fromarray(arr).save(buffer, format="PNG")
-    return "data:image/png;base64," + base64.b64encode(buffer.getvalue()).decode("ascii")
+    image.save(buffer, format="PNG")
+    png = buffer.getvalue()
+    if len(png) <= max_bytes:
+        return png, "png"
+
+    for quality in (95, 85, 75, 65):
+        buffer = BytesIO()
+        image.save(buffer, format="JPEG", quality=quality, optimize=True)
+        if buffer.tell() <= max_bytes:
+            return buffer.getvalue(), "jpeg"
+
+    for scale in (0.75, 0.6, 0.45, 0.3):
+        buffer = BytesIO()
+        resized = image.resize((max(1, int(image.width * scale)), max(1, int(image.height * scale))),
+                               Image.LANCZOS)
+        resized.save(buffer, format="JPEG", quality=80, optimize=True)
+        if buffer.tell() <= max_bytes:
+            return buffer.getvalue(), "jpeg"
+
+    raise RuntimeError("图片压缩后仍然超过网关请求体上限 / image still exceeds the gateway body limit "
+                       "after compression；改用图片链接（reference_image_urls）会更稳")
 
 
-def tensor_to_data_uri(image):
+def make_data_uri(payload, kind):
+    mime = "image/jpeg" if kind == "jpeg" else "image/png"
+    return "data:%s;base64,%s" % (mime, base64.b64encode(payload).decode("ascii"))
+
+
+def array_to_data_uri(frame, max_bytes=None):
+    payload, kind = encode_frame(frame, max_bytes or MAX_BODY_IMAGE_BYTES)
+    return make_data_uri(payload, kind)
+
+
+def count_frames(images):
+    """How many frames a ComfyUI IMAGE input carries (a batch may hold several)."""
+    if images is None:
+        return 0
+    arr = images
+    if hasattr(arr, "detach"):
+        arr = arr.detach().cpu().numpy()
+    arr = np.asarray(arr)
+    return 1 if arr.ndim == 3 else int(arr.shape[0])
+
+
+def tensor_to_data_uri(image, max_bytes=None):
     """First frame of a single IMAGE, or None."""
     if image is None:
         return None
@@ -252,10 +303,10 @@ def tensor_to_data_uri(image):
     arr = np.asarray(arr)
     if arr.ndim == 3:
         arr = arr[None, ...]
-    return array_to_data_uri(arr[0])
+    return array_to_data_uri(arr[0], max_bytes)
 
 
-def tensor_batch_to_data_uris(images, limit):
+def tensor_batch_to_data_uris(images, limit, max_bytes=None):
     """Every frame of a batch (or a single image) as data URIs, capped at limit."""
     if images is None:
         return []
@@ -265,7 +316,7 @@ def tensor_batch_to_data_uris(images, limit):
     arr = np.asarray(arr)
     if arr.ndim == 3:
         arr = arr[None, ...]
-    return [array_to_data_uri(frame) for frame in arr[:limit]]
+    return [array_to_data_uri(frame, max_bytes) for frame in arr[:limit]]
 
 
 def split_uri_lines(text):
@@ -459,6 +510,10 @@ def explain_http_error(status, text, model=None):
         return ("上游拒绝了这次请求的参数 / the upstream rejected the request parameters (HTTP 400): %s "
                 "—— 按它给出的限制调整对应控件后重试（例如它只支持 16:9 / 9:16 / 1:1 时，"
                 "就把 ratio 从 adaptive 改成其中之一）。" % snippet)
+    if status == 413:
+        return ("请求体太大被网关拒绝 (HTTP 413) / request body too large: 内嵌图片的 base64 超过了网关的"
+                "请求体上限（nginx 默认 1 MB）。节点会自动压缩图片；如果仍然报这个错，请改用图片链接"
+                "（reference_image_urls），或请平台把 client_max_body_size 调大。")
     if status in (401, 403):
         return ("鉴权失败 / authentication failed (HTTP %s): 检查 config.ini 里的 KEY。"
                 "Upstream said: %s" % (status, snippet))
@@ -648,10 +703,13 @@ def generate(prompt, model, duration, seed, resolution, ratio, audio, prompt_ext
              file_url="", link_url="", extra_json=""):
     cfg = load_config()
     progress = make_progress()
-    frame = tensor_to_data_uri(first_frame) or (first_frame_url.strip() or None)
-    tail = tensor_to_data_uri(last_frame) or (last_frame_url.strip() or None)
+    # split the inline-image budget across every frame we are about to send
+    total_frames = (count_frames(first_frame) + count_frames(last_frame) + count_frames(reference_images))
+    budget = max(64 * 1024, MAX_BODY_IMAGE_BYTES // max(1, total_frames))
+    frame = tensor_to_data_uri(first_frame, budget) or (first_frame_url.strip() or None)
+    tail = tensor_to_data_uri(last_frame, budget) or (last_frame_url.strip() or None)
 
-    images = tensor_batch_to_data_uris(reference_images, MAX_REFERENCE_IMAGES)
+    images = tensor_batch_to_data_uris(reference_images, MAX_REFERENCE_IMAGES, budget)
     images += split_uri_lines(reference_image_urls)
     videos = split_uri_lines(reference_video_urls)
     audios = split_uri_lines(reference_audio_urls)

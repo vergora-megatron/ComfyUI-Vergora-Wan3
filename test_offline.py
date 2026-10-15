@@ -5,6 +5,7 @@ against a stub HTTP layer. No network, no API key, no cost.
 Run it with any Python that has numpy:  python test_offline.py
 """
 
+import base64
 import os
 import sys
 import tempfile
@@ -296,6 +297,23 @@ def main():
     url = nodes.wait_for_video(nodes.load_config(), "task-under-test", bar)
     assert url.endswith("r.mp4"), url
     assert 42 in bar.values, bar.values
+
+    # a big local image must be shrunk to fit the gateway's request body limit
+    noisy = np.random.RandomState(0).rand(1024, 1024, 3).astype(np.float32)
+    uri = nodes.tensor_to_data_uri(noisy, max_bytes=200 * 1024)
+    raw = base64.b64decode(uri.split(",", 1)[1])
+    assert len(raw) <= 200 * 1024, len(raw)
+    assert uri.startswith("data:image/"), uri[:30]
+
+    # 413 gets its own explanation
+    nodes.http_post_json = lambda url, headers, payload, timeout=120: (
+        413, "<html><head><title>413 Request Entity Too Large</title></head></html>")
+    try:
+        nodes.submit_task(nodes.load_config(), {"model": "w3.0-video", "prompt": "x"})
+    except RuntimeError as exc:
+        assert "413" in str(exc) and "client_max_body_size" in str(exc), exc
+    else:
+        raise AssertionError("a 413 should raise")
 
     print("OK 全部通过 / all checks passed")
     print("  submit url :", STATE["post_url"])

@@ -216,6 +216,7 @@ running long clips. The node itself does not meter anything.
 | `402 Insufficient balance` | The request costs more credits than the account holds. The message states the required and available amounts; top up, or lower `resolution` / `duration` |
 | Task fails with `缺少必填参数：ref_image_0` (any "ref_image" wording) | That model's channel is image-driven. `minimax-h3` needs a reference image, so a text-only job cannot work there: connect an `IMAGE` to `reference_images` (or fill `reference_image_urls`), or use `w3.0-video` for text-to-video. The node now refuses a text-only request for such a model locally instead of burning a queue slot |
 | The job completes but the saved file is 0 bytes | The CDN dropped the transfer. The node verifies the download, retries three times, and only then raises an error that contains the video URL so you can fetch it by hand |
+| `413 Request Entity Too Large` | The inline image pushed the request body past the gateway's limit (nginx defaults to 1 MB). The node now budgets and compresses local images automatically; if it still happens, use `reference_image_urls` with a hosted image, or ask the platform to raise `client_max_body_size` |
 | `401` | Wrong or expired key |
 | `400 prompt is required` | Neither a prompt nor a frame was supplied |
 | `524` | The platform edge timed out. Video generation is asynchronous, so this normally means a platform-side hiccup; retry |
@@ -243,6 +244,9 @@ the error you see in ComfyUI already tells you what to change.
   which is the most robust path; use `first_frame_url` / `reference_image_urls` only with links you
   control. `reference_videos` and `reference_audios` are URL-only, so those always need a stable
   public URL.
+  Inline images are re-encoded to stay inside the gateway's request body limit (PNG when it fits,
+  JPEG or a smaller resolution when it does not), with the budget split across however many frames
+  the node is sending.
 - Pricing, availability and the exact set of accepted parameters are controlled by the platform,
   not by this node.
 
