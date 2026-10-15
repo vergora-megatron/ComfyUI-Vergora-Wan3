@@ -226,6 +226,28 @@ def auth_headers(cfg, with_json=True):
     return headers
 
 
+NETWORK_HINTS = ("ssl", "eof", "timed out", "timeout", "connection reset", "connection aborted",
+                 "connection refused", "remote end closed", "handshake", "temporarily unavailable",
+                 "network is unreachable", "getaddrinfo", "proxy", "unexpected_eof")
+
+
+def looks_like_network_error(exc):
+    """True when the failure is the network path, not the request itself."""
+    text = "%s %s" % (exc.__class__.__name__, exc)
+    text = text.lower()
+    return any(hint in text for hint in NETWORK_HINTS)
+
+
+def network_error_message(exc, url):
+    return ("网络中断 / network error while talking to %s: %s\n"
+            "这是到平台的 TLS/连接被切断，多半是本机出网链路（代理、VPN）不稳，不是参数或密钥的问题。"
+            "为避免重复建任务重复扣费，提交请求没有自动重试——任务大概率没有创建，直接再跑一次即可；"
+            "如果担心，可到平台控制台看这个时间点附近的请求记录再重跑。 / The TLS connection to the "
+            "gateway was cut, most likely a local proxy or VPN hiccup. Submits are deliberately not "
+            "retried automatically (a duplicate could be billed twice), so just run again."
+            % (url, exc))
+
+
 # --------------------------------------------------------------------------
 # Image helpers
 # --------------------------------------------------------------------------
@@ -557,7 +579,12 @@ def submit_task(cfg, payload):
         ensure_ascii=False,
     )
     log("[vergora] 提交任务 / submit -> %s  %s" % (url, preview))
-    status, text = http_post_json(url, auth_headers(cfg), payload, timeout=120)
+    try:
+        status, text = http_post_json(url, auth_headers(cfg), payload, timeout=120)
+    except Exception as exc:  # noqa: BLE001
+        if looks_like_network_error(exc):
+            raise RuntimeError(network_error_message(exc, url)) from exc
+        raise
     if status >= 400:
         hint = explain_http_error(status, text, payload.get("model"))
         raise RuntimeError(hint or ("提交失败 / submit failed HTTP %s: %s" % (status, text[:400])))
@@ -600,6 +627,8 @@ def wait_for_video(cfg, task_id, progress=None):
             consecutive_errors += 1
             log("[vergora] 查询出错第 %d 次 / poll error %d: %s" % (consecutive_errors, consecutive_errors, exc))
             if consecutive_errors >= 5:
+                if looks_like_network_error(exc):
+                    raise RuntimeError(network_error_message(exc, cfg["base_url"] + "/videos/" + task_id))
                 raise RuntimeError("连续 %d 次查询失败 / %d consecutive poll failures, last: %s"
                                    % (consecutive_errors, consecutive_errors, exc))
             time.sleep(cfg["poll_interval"])

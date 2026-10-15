@@ -315,6 +315,22 @@ def main():
     else:
         raise AssertionError("a 413 should raise")
 
+    # a dropped TLS connection must be explained, and must not be retried silently
+    calls = {"n": 0}
+
+    def mock_post_json(url, headers, payload, timeout=120):
+        calls["n"] += 1
+        raise RuntimeError("SSLError(SSLEOFError(8, '[SSL: UNEXPECTED_EOF_WHILE_READING]'))")
+
+    nodes.http_post_json = mock_post_json
+    try:
+        nodes.submit_task(nodes.load_config(), {"model": "w3.0-video", "prompt": "x"})
+    except RuntimeError as exc:
+        assert "网络中断" in str(exc) and "没有自动重试" in str(exc), exc
+    else:
+        raise AssertionError("a network error should raise")
+    assert calls["n"] == 1, "a submit must not be retried automatically (could double-bill)"
+
     print("OK 全部通过 / all checks passed")
     print("  submit url :", STATE["post_url"])
     print("  payload    :", sorted(payload.keys()))
