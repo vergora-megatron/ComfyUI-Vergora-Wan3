@@ -51,8 +51,14 @@ def fake_get_json(url, headers, timeout=60):
 
 def fake_download(url, dest_path, timeout=600):
     STATE["download_url"] = url
+    STATE["downloads"] = STATE.get("downloads", 0) + 1
+    if STATE.get("short_downloads"):
+        STATE["short_downloads"] -= 1
+        with open(dest_path, "wb") as handle:
+            handle.write(b"")  # a stalled transfer leaves nothing behind
+        return
     with open(dest_path, "wb") as handle:
-        handle.write(b"\x00\x00\x00\x18ftypmp42 fake-mp4-bytes")
+        handle.write(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 9000)  # big enough to be accepted
 
 
 def fake_get_failure(url, headers, timeout=60):
@@ -169,18 +175,28 @@ def main():
                        ratio="adaptive", duration=5, audio=True, prompt_extend=True, seed=-1)
     assert os.path.exists(result_r[0]), result_r
 
+    # ---- a stalled download must be retried instead of written as a 0-byte file ----
+    STATE["polls"] = 0
+    STATE["short_downloads"] = 1
+    _, result_dl = call(node, prompt="retry download", model="w3.0-video", resolution="480p",
+                        ratio="adaptive", duration=5, audio=True, prompt_extend=True, seed=-1)
+    assert os.path.getsize(result_dl[0]) > 8192, result_dl
+    assert not os.path.exists(result_dl[0] + ".part"), "partial file should be cleaned up"
+
     # ---- contract validation, caught before anything is billed ----
     base = dict(model="w3.0-video", resolution="1080p", ratio="adaptive",
                 duration=5, audio=True, prompt_extend=True, seed=-1)
     # models with a narrowed ratio set: adaptive falls back, an unsupported fixed ratio is refused
     STATE["polls"] = 0
     call(node, model="minimax-h3", prompt="x", resolution="480p", ratio="adaptive",
-         duration=5, audio=True, prompt_extend=True, seed=-1)
+         duration=5, audio=True, prompt_extend=True, seed=-1, reference_images=batch)
     assert STATE["payload"]["ratio"] == "16:9", STATE["payload"]
     call(node, model="minimax-h3", prompt="x", resolution="480p", ratio="9:16",
-         duration=5, audio=True, prompt_extend=True, seed=-1)
+         duration=5, audio=True, prompt_extend=True, seed=-1, reference_images=batch)
     assert STATE["payload"]["ratio"] == "9:16", STATE["payload"]
     expect_error(dict(base, model="minimax-h3", prompt="x", ratio="4:3"), "只支持", node)
+    # this channel is image-driven: text only must be refused locally
+    expect_error(dict(base, model="minimax-h3", prompt="x", ratio="16:9"), "必须给一张图", node)
     expect_error(dict(base, prompt=""), "至少要给", node)
     expect_error(dict(base, prompt="x", first_frame=image,
                       reference_video_urls="https://example.com/v.mp4"),
@@ -252,6 +268,34 @@ def main():
         "detail": "Failed to download file: HTTP 502"}}}
     message = nodes.explain_task_failure(failed, "")
     assert "素材" in message and "Base64" in message, message
+
+    # nested error shape + the reference-image requirement
+    nested = {"task_info": {"status": "failed"},
+              "data": {"error": {"code": "task_failed", "message": "缺少必填参数：ref_image_0"}}}
+    message = nodes.explain_task_failure(nested, "")
+    assert "参考图" in message and "w3.0-video" in message, message
+
+    # the upstream's own progress must drive the canvas bar
+    class FakeProgress:
+        def __init__(self):
+            self.values = []
+
+        def update_absolute(self, value, total=100):
+            self.values.append(value)
+
+    def poll_with_progress(url, headers, timeout=60):
+        STATE["polls"] += 1
+        if STATE["polls"] < 2:
+            return 200, ('{"task_info":{"status":"processing"},'
+                         '"data":{"progress":42,"progress_text":"encoding\\nsecond line"}}')
+        return 200, '{"task_info":{"status":"completed"},"videos":["https://e.invalid/r.mp4"]}'
+
+    nodes.http_get_json = poll_with_progress
+    STATE["polls"] = 0
+    bar = FakeProgress()
+    url = nodes.wait_for_video(nodes.load_config(), "task-under-test", bar)
+    assert url.endswith("r.mp4"), url
+    assert 42 in bar.values, bar.values
 
     print("OK 全部通过 / all checks passed")
     print("  submit url :", STATE["post_url"])

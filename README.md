@@ -13,6 +13,9 @@ submitted, polled and downloaded for you, and the finished clip shows up in the 
   ratios plus `adaptive`.
   With a model whose channel has a narrowed ratio set, the node replaces `adaptive` with `16:9` and
   logs it, and refuses any other unsupported ratio locally before the request is sent.
+  That channel is also image-driven: it needs a reference image, so a text-only `minimax-h3` job is
+  refused locally (the upstream would answer `缺少必填参数：ref_image_0`). Use `w3.0-video` when you
+  want to generate purely from text.
 - **Modes:** text to video, image to video (first and/or last frame), and reference to video
   (reference images, videos, audio, documents, or a web link).
 - **Full parameter set:** resolution, aspect ratio, duration, audio on/off, prompt rewriting and
@@ -131,6 +134,9 @@ upstream after you have waited for a queue.
 
 **Text to video.** Fill in `prompt`, keep `duration` at 5 and press Run. The console prints the
 submit call and then one status line per poll; the clip usually lands in two to four minutes.
+While it waits, the node drives ComfyUI's progress bar: it uses the upstream's own percentage when
+the channel reports one (`progress` in the task payload, which the newer channels do), and a
+time-based estimate otherwise. That way the node never looks frozen during a long render.
 
 **Image to video.** Feed any `IMAGE` into `first_frame` (a `LoadImage` node, or the output of an
 image generation node). If your image already lives at a public URL, put the URL in
@@ -207,6 +213,8 @@ running long clips. The node itself does not meter anything.
 | `503 No available channel for model xxx` | This key has no channel for that model. Switch the `model` widget back to `w3.0-video`, or ask the platform to enable the model for your key. `minimax-h3` in particular is listed by the platform but is not enabled for every key |
 | `400 invalid_request` mentioning a ratio (for example `ratio 只支持 16:9、9:16、1:1`) | The backend serving your selected model accepts fewer ratios than `w3.0-video` does. `minimax-h3` is currently served by a Seedance 2.0 channel that only takes `16:9`, `9:16` and `1:1`. The node now covers this: `adaptive` is switched to `16:9` automatically (it logs the change), and an explicitly unsupported ratio such as `4:3` is refused locally instead of being sent |
 | `402 Insufficient balance` | The request costs more credits than the account holds. The message states the required and available amounts; top up, or lower `resolution` / `duration` |
+| Task fails with `缺少必填参数：ref_image_0` (any "ref_image" wording) | That model's channel is image-driven. `minimax-h3` needs a reference image, so a text-only job cannot work there: connect an `IMAGE` to `reference_images` (or fill `reference_image_urls`), or use `w3.0-video` for text-to-video. The node now refuses a text-only request for such a model locally instead of burning a queue slot |
+| The job completes but the saved file is 0 bytes | The CDN dropped the transfer. The node verifies the download, retries three times, and only then raises an error that contains the video URL so you can fetch it by hand |
 | `401` | Wrong or expired key |
 | `400 prompt is required` | Neither a prompt nor a frame was supplied |
 | `524` | The platform edge timed out. Video generation is asynchronous, so this normally means a platform-side hiccup; retry |

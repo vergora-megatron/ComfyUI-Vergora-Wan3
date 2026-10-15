@@ -87,6 +87,12 @@ MODEL_RATIO_LIMITS = {
     "minimax-h3": ["16:9", "9:16", "1:1"],
 }
 
+# Channels that need an image input. Observed 2026-10-15: the minimax-h3 route is a
+# reference-to-video channel and answers "缺少必填参数：ref_image_0" for text-only jobs.
+MODEL_REQUIRES_IMAGE = {
+    "minimax-h3": "reference_images",
+}
+
 CATEGORY = "vergora"
 
 
@@ -344,6 +350,13 @@ def build_payload(prompt, model, duration, seed, resolution, ratio, audio, promp
     validate_request(prompt, first_frame, last_frame, reference_images,
                      reference_videos, reference_audios, file_url, link_url, duration)
     ratio = reconcile_ratio(model, ratio)
+    # `reference_images` here is already the merged list from the IMAGE batch and the URL lines
+    if MODEL_REQUIRES_IMAGE.get(str(model)) and not (reference_images or first_frame or last_frame):
+        raise RuntimeError(
+            "%s 的通道目前只支持参考图/首帧生视频，必须给一张图 / %s currently needs an image input: "
+            "把图片接到 reference_images（或 reference_image_urls、first_frame），"
+            "纯文生视频请改用 w3.0-video。" % (model, model)
+        )
 
     payload = {
         "model": model,
@@ -457,9 +470,17 @@ def explain_http_error(status, text, model=None):
 
 def explain_task_failure(data, text):
     """Add a hint to an upstream task failure when the reason is a known trap."""
-    error = (data.get("task_info") or {}).get("error") or {}
-    detail = str(error.get("detail") or error.get("title") or "")
+    error = {}
+    for holder in (data.get("task_info"), data.get("data")):
+        if isinstance(holder, dict) and isinstance(holder.get("error"), dict):
+            error = holder["error"]
+            break
+    detail = str(error.get("message") or error.get("detail") or error.get("title") or "")
     lower = detail.lower()
+    if "ref_image" in lower or "缺少必填参数" in detail:
+        return ("任务失败：这个模型的通道要求提供参考图 / this channel requires a reference image "
+                "（上游原话：“%s”）。把图片接到 reference_images，或把图片链接填进 "
+                "reference_image_urls；只想用文字生成视频请改用 w3.0-video。" % detail)
     if "failed to download file" in lower:
         return ("任务失败：上游下载不到你提供的素材链接 / the upstream could not fetch your media URL. "
                 "多半是链接已过期或对它不可达——把图片接到 IMAGE 输入上（节点会转成 Base64 发送），"
@@ -531,7 +552,22 @@ def wait_for_video(cfg, task_id, progress=None):
         consecutive_errors = 0
         task_info = data.get("task_info") or {}
         state = str(task_info.get("status") or data.get("status") or "").lower()
-        log("[vergora] 已等待 / waited %4.0f s  状态 / status=%s" % (elapsed, state or "unknown"))
+        # the upstream reports real progress (and a progress label) on its own channel
+        reported = None
+        label = ""
+        for holder in (data, data.get("data")):
+            if isinstance(holder, dict):
+                value = holder.get("progress")
+                if reported is None and isinstance(value, (int, float)):
+                    reported = int(value)
+                if not label and isinstance(holder.get("progress_text"), str):
+                    label = holder["progress_text"].strip().splitlines()[0][:40]
+        if reported is not None:
+            tick_progress(progress, max(0, min(99, reported)))
+        log("[vergora] 已等待 / waited %4.0f s  状态 / status=%s%s"
+            % (elapsed, state or "unknown", ("  进度 / progress=%d%%" % reported) if reported is not None else ""))
+        if label:
+            log("[vergora]   上游进度说明 / upstream says: %s" % label)
         if state in ("completed", "succeeded", "success", "done"):
             video_url = extract_video_url(data)
             if video_url:
@@ -542,14 +578,41 @@ def wait_for_video(cfg, task_id, progress=None):
         time.sleep(cfg["poll_interval"])
 
 
-def download_video(cfg, video_url, task_id):
+def download_video(cfg, video_url, task_id, attempts=3):
+    """Download the clip, verify it actually arrived, and retry a stalled transfer.
+
+    The CDN occasionally drops the connection mid-transfer and leaves a 0-byte file,
+    so an unverified write would look like success but produce an unplayable clip.
+    """
     out_dir = resolve_output_dir(cfg)
     os.makedirs(out_dir, exist_ok=True)
     filename = "vergora_%s_%d.mp4" % (str(task_id).replace("-", "")[:8], int(time.time()))
     path = os.path.join(out_dir, filename)
-    http_download(video_url, path, timeout=600)
-    log("[vergora] 已保存 / saved %s (%.1f MB)" % (path, os.path.getsize(path) / 1024.0 / 1024.0))
-    return path
+    part = path + ".part"
+    last_error = ""
+    for attempt in range(1, attempts + 1):
+        try:
+            http_download(video_url, part, timeout=600)
+            size = os.path.getsize(part) if os.path.exists(part) else 0
+            if size > 8192:
+                os.replace(part, path)
+                log("[vergora] 已保存 / saved %s (%.1f MB)" % (path, size / 1024.0 / 1024.0))
+                return path
+            last_error = "只拿到 %d 字节 / got only %d bytes" % (size, size)
+        except Exception as exc:  # noqa: BLE001
+            last_error = str(exc)
+        log("[vergora] 下载不完整（%s），第 %d/%d 次重试 / incomplete download, retry %d/%d"
+            % (last_error, attempt, attempts, attempt, attempts))
+        if os.path.exists(part):
+            try:
+                os.remove(part)
+            except OSError:
+                pass
+        time.sleep(2 * attempt)
+    raise RuntimeError(
+        "下载失败（试了 %d 次）/ download failed after %d attempts: %s —— 任务本身已完成，"
+        "视频在 %s，可以手动下载或稍后重试。" % (attempts, attempts, last_error, video_url)
+    )
 
 
 def build_preview_ui(path):
