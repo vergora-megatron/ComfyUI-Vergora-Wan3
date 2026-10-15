@@ -11,6 +11,8 @@ submitted, polled and downloaded for you, and the finished clip shows up in the 
   When `minimax-h3` is available it is served by a Seedance 2.0 channel that only accepts the
   `16:9`, `9:16` and `1:1` ratios, so `adaptive` is rejected there; `w3.0-video` accepts all six
   ratios plus `adaptive`.
+  With a model whose channel has a narrowed ratio set, the node replaces `adaptive` with `16:9` and
+  logs it, and refuses any other unsupported ratio locally before the request is sent.
 - **Modes:** text to video, image to video (first and/or last frame), and reference to video
   (reference images, videos, audio, documents, or a web link).
 - **Full parameter set:** resolution, aspect ratio, duration, audio on/off, prompt rewriting and
@@ -203,7 +205,7 @@ running long clips. The node itself does not meter anything.
 | --- | --- |
 | `没有配置 API key` | `KEY` is empty in `config.ini` and `VERGORA_API_KEY` is not set |
 | `503 No available channel for model xxx` | This key has no channel for that model. Switch the `model` widget back to `w3.0-video`, or ask the platform to enable the model for your key. `minimax-h3` in particular is listed by the platform but is not enabled for every key |
-| `400 invalid_request` mentioning a ratio (for example `ratio 只支持 16:9、9:16、1:1`) | The backend serving your selected model accepts fewer ratios than `w3.0-video` does. `minimax-h3` is currently served by a Seedance 2.0 channel that only takes `16:9`, `9:16` and `1:1`, so `adaptive` is rejected — pick one of the three |
+| `400 invalid_request` mentioning a ratio (for example `ratio 只支持 16:9、9:16、1:1`) | The backend serving your selected model accepts fewer ratios than `w3.0-video` does. `minimax-h3` is currently served by a Seedance 2.0 channel that only takes `16:9`, `9:16` and `1:1`. The node now covers this: `adaptive` is switched to `16:9` automatically (it logs the change), and an explicitly unsupported ratio such as `4:3` is refused locally instead of being sent |
 | `402 Insufficient balance` | The request costs more credits than the account holds. The message states the required and available amounts; top up, or lower `resolution` / `duration` |
 | `401` | Wrong or expired key |
 | `400 prompt is required` | Neither a prompt nor a frame was supplied |

@@ -172,6 +172,15 @@ def main():
     # ---- contract validation, caught before anything is billed ----
     base = dict(model="w3.0-video", resolution="1080p", ratio="adaptive",
                 duration=5, audio=True, prompt_extend=True, seed=-1)
+    # models with a narrowed ratio set: adaptive falls back, an unsupported fixed ratio is refused
+    STATE["polls"] = 0
+    call(node, model="minimax-h3", prompt="x", resolution="480p", ratio="adaptive",
+         duration=5, audio=True, prompt_extend=True, seed=-1)
+    assert STATE["payload"]["ratio"] == "16:9", STATE["payload"]
+    call(node, model="minimax-h3", prompt="x", resolution="480p", ratio="9:16",
+         duration=5, audio=True, prompt_extend=True, seed=-1)
+    assert STATE["payload"]["ratio"] == "9:16", STATE["payload"]
+    expect_error(dict(base, model="minimax-h3", prompt="x", ratio="4:3"), "只支持", node)
     expect_error(dict(base, prompt=""), "至少要给", node)
     expect_error(dict(base, prompt="x", first_frame=image,
                       reference_video_urls="https://example.com/v.mp4"),

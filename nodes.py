@@ -80,6 +80,13 @@ MAX_REFERENCE_IMAGES = 10
 MAX_REFERENCE_VIDEOS = 5
 MAX_REFERENCE_AUDIOS = 5
 
+# Some models are served by an upstream channel that accepts fewer ratios than the
+# W3.0 contract does. Observed 2026-10-15: minimax-h3 is routed through a Seedance
+# 2.0 channel that rejects "adaptive" and only takes these three.
+MODEL_RATIO_LIMITS = {
+    "minimax-h3": ["16:9", "9:16", "1:1"],
+}
+
 CATEGORY = "vergora"
 
 
@@ -309,6 +316,21 @@ def validate_request(prompt, first_frame, last_frame, reference_images,
                            "(smart duration) or 2 to 30 seconds")
 
 
+def reconcile_ratio(model, ratio):
+    """Fit the requested ratio to what the model's channel actually accepts."""
+    allowed = MODEL_RATIO_LIMITS.get(str(model))
+    if not allowed or ratio in allowed:
+        return ratio
+    if ratio == "adaptive":
+        log("[vergora] %s 不支持 adaptive，已自动改用 %s / %s does not accept 'adaptive', "
+            "switched to %s" % (model, allowed[0], model, allowed[0]))
+        return allowed[0]
+    raise RuntimeError(
+        "%s 只支持 %s，不支持 %s / %s only supports %s"
+        % (model, " / ".join(allowed), ratio, model, " / ".join(allowed))
+    )
+
+
 def build_payload(prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
                   first_frame=None, last_frame=None,
                   reference_images=None, reference_videos=None, reference_audios=None,
@@ -321,6 +343,7 @@ def build_payload(prompt, model, duration, seed, resolution, ratio, audio, promp
 
     validate_request(prompt, first_frame, last_frame, reference_images,
                      reference_videos, reference_audios, file_url, link_url, duration)
+    ratio = reconcile_ratio(model, ratio)
 
     payload = {
         "model": model,
