@@ -501,6 +501,12 @@ def explain_http_error(status, text, model=None):
         return ("请求体太大被网关拒绝 (HTTP 413) / request body too large: 内嵌图片的 base64 超过了网关的"
                 "请求体上限（nginx 默认 1 MB）。节点会自动压缩图片；如果仍然报这个错，请改用图片链接"
                 "（reference_image_urls），或请平台把 client_max_body_size 调大。")
+    if status == 404:
+        return ("接口返回 404（路由不存在）/ HTTP 404: 请求没有打到平台预期的接口上。"
+                "最常见的原因是本机配了代理（环境变量 HTTP_PROXY / HTTPS_PROXY、系统代理或 VPN 客户端），"
+                "而它没有把这些路径转发出去；也可能是 BASE_URL 写错。"
+                "给 api.vergora.ai 加直连（设 NO_PROXY=api.vergora.ai）或先停掉代理再试。"
+                "Upstream said: %s" % snippet)
     if status in (401, 403):
         return ("鉴权失败 / authentication failed (HTTP %s): 检查 config.ini 里的 KEY。"
                 "Upstream said: %s" % (status, snippet))

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.1 - 2026-10-16
+
+Fixed
+
+- A `404 {"detail":"Not Found"}` while polling is now explained instead of being passed through raw. It
+  means the request never reached the gateway's task route — usually a local proxy
+  (`HTTP_PROXY` / `HTTPS_PROXY`, a system proxy or a VPN client) that does not forward those paths, or
+  a wrong `BASE_URL`. The message suggests `NO_PROXY=api.vergora.ai` or disabling the proxy.
+  Reported by a customer whose job had actually completed on the platform while every poll came back
+  404 from their local proxy.
+
 ## 0.3.0 - 2026-10-15
 
 Breaking change: `minimax-h3` moved out of this package. It follows a different contract

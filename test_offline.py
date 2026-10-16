@@ -317,6 +317,10 @@ def main():
     else:
         raise AssertionError("a 413 should raise")
 
+    # a 404 means the request never reached the expected route (proxy / wrong base url)
+    hint = nodes.explain_http_error(404, '{"detail":"Not Found"}')
+    assert "404" in hint and "代理" in hint, hint
+
     # a dropped TLS connection must be explained, and must not be retried silently
     calls = {"n": 0}
 
