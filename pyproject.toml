@@ -6,7 +6,10 @@ requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = ["requests"]
 
+[project.urls]
+Repository = "https://github.com/vergora-megatron/ComfyUI-Vergora-Wan3"
+
 [tool.comfy]
 PublisherId = "vergora"
 DisplayName = "ComfyUI Vergora Wan 3.0 Video"
-Icon = ""
+Icon = "https://raw.githubusercontent.com/vergora-megatron/ComfyUI-Vergora-Wan3/main/icon.svg"
