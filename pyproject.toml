@@ -10,6 +10,6 @@ dependencies = ["requests"]
 Repository = "https://github.com/vergora-megatron/ComfyUI-Vergora-Wan3"
 
 [tool.comfy]
-PublisherId = "vergora"
+PublisherId = "levi-li"
 DisplayName = "ComfyUI Vergora Wan 3.0 Video"
 Icon = "https://raw.githubusercontent.com/vergora-megatron/ComfyUI-Vergora-Wan3/main/icon.svg"
