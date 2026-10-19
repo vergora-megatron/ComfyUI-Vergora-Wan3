@@ -100,6 +100,13 @@ def expect_error(kwargs, needle, node):
 
 def main():
     node = prepare()
+
+    # the widget defaults are part of the contract: prompt rewriting is opt-in
+    required = nodes.VergoraVideoGenerator.INPUT_TYPES()["required"]
+    assert required["prompt_extend"][1]["default"] is False, required["prompt_extend"]
+    assert required["audio"][1]["default"] is True, required["audio"]
+    assert required["seed"][1]["default"] == -1, required["seed"]
+
     image = np.zeros((64, 96, 3), dtype=np.float32)
     image[:, :, 0] = 1.0
     batch = np.zeros((2, 64, 96, 3), dtype=np.float32)

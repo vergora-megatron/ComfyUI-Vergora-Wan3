@@ -1,6 +1,6 @@
 [project]
 name = "comfyui-vergora-wan3"
-version = "0.3.1"
+version = "0.3.2"
 description = "ComfyUI nodes for Wan 3.0 video generation through the Vergora API"
 requires-python = ">=3.10"
 license = { text = "MIT" }

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.3.2 - 2026-10-19
+
+Changed
+
+- `prompt_extend` now defaults to **false**: the prompt is sent as written. It used to default to true,
+  which let upstream rewrite (expand) the prompt and drift from the original wording. Turn it on when
+  you want richer motion and do not mind the rewrite.
+- The bundled example workflows follow the new default.
+
 ## 0.3.1 - 2026-10-16
 
 Fixed

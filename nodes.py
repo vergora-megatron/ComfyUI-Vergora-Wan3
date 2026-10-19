@@ -776,8 +776,10 @@ class VergoraVideoGenerator:
                 "duration": ("INT", {"default": 5, "min": -1, "max": 30, "step": 1,
                                      "tooltip": "-1 = smart duration, otherwise 2 to 30 seconds"}),
                 "audio": ("BOOLEAN", {"default": True}),
-                "prompt_extend": ("BOOLEAN", {"default": True,
-                                              "tooltip": "Let upstream rewrite the prompt (usually better motion)"}),
+                "prompt_extend": ("BOOLEAN", {"default": False,
+                                              "tooltip": "默认关闭：按你写的提示词生成。"
+                                                         "开启则让上游改写（扩展）提示词，通常动作和运镜更丰富，"
+                                                         "但会偏离原文"}),
                 "seed": ("INT", {"default": -1, "min": -1, "max": 2147483647,
                                  "tooltip": "-1 = let the service pick a seed"}),
             },

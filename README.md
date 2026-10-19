@@ -73,7 +73,7 @@ Category: `vergora`
 | `ratio` | COMBO | `adaptive` | all | `adaptive`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` |
 | `duration` | INT | 5 | all | `-1` for smart duration, otherwise 2 to 30 seconds. This sets the length, not the prompt |
 | `audio` | BOOLEAN | true | all | Whether the clip carries an audio track. Pricing is identical either way |
-| `prompt_extend` | BOOLEAN | true | all | Let upstream rewrite the prompt, which usually improves motion. Turn off to stay literal |
+| `prompt_extend` | BOOLEAN | **false** | all | Off by default: the prompt is sent as written. Turn it on to let upstream rewrite (expand) it, which usually improves motion but drifts from the original wording |
 | `seed` | INT | -1 | all | `-1` means "do not send a seed". Any value `>= 0` is forwarded |
 | `first_frame` | IMAGE (optional) | - | keyframe | Image to video, or the first frame of a pair |
 | `last_frame` | IMAGE (optional) | - | keyframe | Pair it with `first_frame` for first/last-frame video |
@@ -303,7 +303,7 @@ MIT. See `LICENSE`.
 - `ratio`：`adaptive`（默认，由内容和素材推断）或 `16:9`、`4:3`、`1:1`、`3:4`、`9:16`
 - `duration`：`-1` 表示智能时长，否则 2 到 30 秒；片子长短只由它决定，提示词里写"30 秒"不会改变时长
 - `audio`：是否输出音轨，开或关价格一样
-- `prompt_extend`：是否让上游改写（扩写）提示词，默认开启，通常动作和运镜更好；关掉更贴近原话
+- `prompt_extend`：**默认关闭**，提示词按原样发送；开启后由上游改写（扩写），通常动作和运镜更丰富，但会偏离原话
 - `seed`：填 `-1` 表示不传种子、让上游随机；填具体数字（0 到 2147483647）会原样传给上游
 - 其它字段可以用 `extra_json` 透传，格式是 JSON 对象
 - 输出：`video_path`（本地 mp4 路径）、`task_id`、`video_url`；文件存到 ComfyUI 的输出目录
