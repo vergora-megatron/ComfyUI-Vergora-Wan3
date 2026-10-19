@@ -3,6 +3,7 @@ __pycache__/
 *.mp4
 *.webm
 config.ini
+node.zip
 output/
 .DS_Store
 .idea/
