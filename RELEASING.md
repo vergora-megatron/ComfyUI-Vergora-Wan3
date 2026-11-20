@@ -6,7 +6,7 @@ Once published, this package can be installed straight from ComfyUI-Manager.
 
 1. Create an account at <https://registry.comfy.org> and create a **publisher**. The publisher id
    (the part after `@` on your profile page) must match `PublisherId` in `pyproject.toml`, which is
-   currently `vergora`. It is globally unique and cannot be changed later.
+   currently `levi-li`. It is globally unique and cannot be changed later.
 2. Create a **Registry Publishing API key** for that publisher (your publisher page → create key).
    The key is shown once; store it somewhere safe.
 
@@ -19,6 +19,15 @@ Once published, this package can be installed straight from ComfyUI-Manager.
 3. Run the offline test: `python test_offline.py`.
 4. Commit and push — the registry reads the repository, and the archive is built from git-tracked
    files.
+5. Create an annotated tag named after the package version, for example `v0.4.0`, and push it:
+
+   ```bash
+   git tag -a v0.4.0 -m "ComfyUI-Vergora 0.4.0"
+   git push origin v0.4.0
+   ```
+
+   Tags use `vMAJOR.MINOR.PATCH`. Do not move or recreate a tag after publication; release a new
+   patch version instead.
 
 ## Publish
 
@@ -39,7 +48,10 @@ page in the ComfyUI documentation for the workflow file.
 ## 中文速记
 
 一次性：在 registry.comfy.org 注册 → 创建 publisher（id 必须与 `pyproject.toml` 的 `PublisherId`
-一致，当前是 `vergora`）→ 生成发布用 API key。
+一致，当前是 `levi-li`）→ 生成发布用 API key。
 
-每次发布：改版本号 + 记 CHANGELOG → `python test_offline.py` → 提交推送 → 在本目录执行
-`comfy node publish`（首次会问 API key）。
+每次发布：改版本号 + 记 CHANGELOG → `python test_offline.py` → 提交推送 → 创建并推送
+`v主版本.次版本.修订版本` tag → 在本目录执行 `comfy node publish`（首次会问 API key）。
+
+Registry 节点 ID 为 `comfyui-vergora-wan3`，显示名为 `ComfyUI-Vergora`，发布者 ID 为
+`levi-li`。节点 ID 是永久安装标识，不应跟随显示名修改。

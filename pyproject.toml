@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-vergora-wan3"
-version = "0.3.2"
-description = "ComfyUI nodes for Wan 3.0 video generation through the Vergora API"
+version = "0.4.0"
+description = "ComfyUI nodes for Wan 3.0 video generation through Alibaba Cloud Model Studio"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = ["requests"]
@@ -11,5 +11,5 @@ Repository = "https://github.com/vergora-megatron/ComfyUI-Vergora-Wan3"
 
 [tool.comfy]
 PublisherId = "levi-li"
-DisplayName = "ComfyUI Vergora Wan 3.0 Video"
+DisplayName = "ComfyUI-Vergora"
 Icon = "https://raw.githubusercontent.com/vergora-megatron/ComfyUI-Vergora-Wan3/main/icon.svg"

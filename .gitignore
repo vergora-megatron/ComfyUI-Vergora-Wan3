@@ -4,6 +4,7 @@ __pycache__/
 *.webm
 config.ini
 node.zip
+.tmp-comfy/
 output/
 .DS_Store
 .idea/

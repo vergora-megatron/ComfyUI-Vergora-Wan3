@@ -220,6 +220,15 @@
             "name": "extra_json"
           },
           "link": null
+        },
+        {
+          "localized_name": "watermark",
+          "name": "watermark",
+          "type": "BOOLEAN",
+          "widget": {
+            "name": "watermark"
+          },
+          "link": null
         }
       ],
       "outputs": [
@@ -247,7 +256,7 @@
       },
       "widgets_values": [
         "The scene comes alive, gentle camera push-in, soft morning light",
-        "w3.0-video",
+        "wan3.0-video",
         "720p",
         "16:9",
         5,
@@ -262,11 +271,12 @@
         "",
         "",
         "",
-        ""
+        "",
+        false
       ],
       "widgets_values_named": {
         "prompt": "The scene comes alive, gentle camera push-in, soft morning light",
-        "model": "w3.0-video",
+        "model": "wan3.0-video",
         "resolution": "720p",
         "ratio": "16:9",
         "duration": 5,
@@ -281,7 +291,8 @@
         "reference_audio_urls": "",
         "file_url": "",
         "link_url": "",
-        "extra_json": ""
+        "extra_json": "",
+        "watermark": false
       }
     }
   ],

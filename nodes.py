@@ -1,16 +1,15 @@
 # -*- coding: utf-8 -*-
-"""ComfyUI node: Wan 3.0 video generation through the Vergora API.
+"""ComfyUI node: Wan 3.0 video generation through Alibaba Cloud Model Studio.
 
-Field set and constraints follow the official W3.0 contract documented at
-https://www.mulerouter.ai/docs/api-reference/endpoint/alibaba/w3.0-video/generation
-(Vergora's gateway exposes the same fields through the asynchronous
-`/v1/videos` route).
+Field set and constraints follow the official Wan 3.0 contract:
+https://docs.modelstudio.console.alibabacloud.com/zh/model-studio/wan3-video-generation-api-reference
 
-Flow (verified 2026-10-14):
-    submit  POST {base}/videos       -> {"task_info": {"id": "...", "status": "pending"}}
-    poll    GET  {base}/videos/{id}  -> {"task_info": {"status": "pending|processing|completed|failed"},
-                                         "videos": ["https://.../result_00.mp4"]}
-    fetch   GET  videos[0]
+Flow:
+    submit  POST {workspace}.{region}/api/v1/services/aigc/video-generation/video-synthesis
+            -> {"output": {"task_id": "...", "task_status": "PENDING"}}
+    poll    GET  {workspace}.{region}/api/v1/tasks/{task_id}
+            -> {"output": {"task_status": "SUCCEEDED", "video_url": "https://..."}}
+    fetch   GET  output.video_url
 
 Three capability sets are selected by the media fields you send:
     prompt only                              -> text to video
@@ -69,19 +68,20 @@ except ImportError:  # pragma: no cover
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(HERE, "config.ini")
 
-DEFAULT_BASE_URL = "https://api.vergora.ai/v1"
+DEFAULT_REGION = "ap-southeast-1"
+BASE_URL_TEMPLATE = "https://{workspace_id}.{region}.maas.aliyuncs.com"
 
-# w3.0-video is Alibaba Wan 3.0. The sibling pack ComfyUI-Vergora-Minimax-h3 covers
-# minimax-h3, which is a different model with a different parameter set.
-VIDEO_MODELS = ["w3.0-video"]
+VIDEO_MODELS = ["wan3.0-video", "wan3.0-video-prime"]
 RESOLUTIONS = ["1080p", "720p", "480p"]
-RATIOS = ["adaptive", "16:9", "4:3", "1:1", "3:4", "9:16"]
+RATIOS = ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"]
+
+LEGACY_MODEL_ALIASES = {"w3.0-video": "wan3.0-video"}
 
 MAX_REFERENCE_IMAGES = 10
 MAX_REFERENCE_VIDEOS = 5
 MAX_REFERENCE_AUDIOS = 5
 
-CATEGORY = "vergora"
+CATEGORY = "alibaba"
 
 
 def log(message):
@@ -132,8 +132,7 @@ def http_post_json(url, headers, payload, timeout=120):
 def http_get_json(url, headers, timeout=60):
     """Return (status_code, response_text).
 
-    Never attach Content-Type here: the gateway tries to parse an empty body as
-    JSON and answers 400 (common.UnmarshalBodyReusable failed) if you do.
+    GET requests carry only the Authorization header.
     """
     if requests is not None:
         response = requests.get(url, headers=headers, timeout=timeout)
@@ -155,7 +154,7 @@ def http_download(url, dest_path, timeout=600):
                     if chunk:
                         handle.write(chunk)
         return
-    request = urllib.request.Request(url, headers={"User-Agent": "vergora-comfyui"})
+    request = urllib.request.Request(url, headers={"User-Agent": "wan3-comfyui"})
     with urllib.request.urlopen(request, timeout=timeout) as response, open(dest_path, "wb") as handle:
         shutil.copyfileobj(response, handle, length=1 << 20)
 
@@ -167,9 +166,13 @@ def http_download(url, dest_path, timeout=600):
 def load_config():
     """Read config.ini; environment variables win over the file."""
     cfg = {
-        "base_url": DEFAULT_BASE_URL,
+        "base_url": "",
+        "workspace_id": "",
+        "region": DEFAULT_REGION,
         "api_key": "",
-        "poll_interval": 10.0,
+        "legacy_base_url": "",
+        "legacy_env_names": [],
+        "poll_interval": 15.0,
         "timeout": 1200.0,
         "output_dir": "",
     }
@@ -178,9 +181,18 @@ def load_config():
         parser.read(CONFIG_PATH, encoding="utf-8")
         if parser.has_section("API"):
             base = parser.get("API", "BASE_URL", fallback="").strip()
+            workspace = parser.get("API", "WORKSPACE_ID", fallback="").strip()
+            region = parser.get("API", "REGION", fallback="").strip()
             key = parser.get("API", "KEY", fallback="").strip()
             if base:
-                cfg["base_url"] = base
+                if "vergora.ai" in base.lower():
+                    cfg["legacy_base_url"] = base
+                else:
+                    cfg["base_url"] = base
+            if workspace:
+                cfg["workspace_id"] = workspace
+            if region:
+                cfg["region"] = region
             if key:
                 cfg["api_key"] = key
         if parser.has_section("RUNTIME"):
@@ -190,10 +202,24 @@ def load_config():
             if out_dir:
                 cfg["output_dir"] = out_dir
 
-    env_base = os.environ.get("VERGORA_BASE_URL", "").strip()
-    env_key = os.environ.get("VERGORA_API_KEY", "").strip()
+    env_base = os.environ.get("DASHSCOPE_BASE_URL", "").strip()
+    env_workspace = os.environ.get("DASHSCOPE_WORKSPACE_ID", "").strip()
+    env_region = os.environ.get("DASHSCOPE_REGION", "").strip()
+    env_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
+    legacy_env_names = [
+        name for name in ("VERGORA_BASE_URL", "VERGORA_API_KEY")
+        if os.environ.get(name, "").strip()
+    ]
+    cfg["legacy_env_names"] = legacy_env_names
+    legacy_env_base = os.environ.get("VERGORA_BASE_URL", "").strip()
+    if legacy_env_base and not env_base:
+        cfg["legacy_base_url"] = legacy_env_base
     if env_base:
         cfg["base_url"] = env_base
+    if env_workspace:
+        cfg["workspace_id"] = env_workspace
+    if env_region:
+        cfg["region"] = env_region
     if env_key:
         cfg["api_key"] = env_key
 
@@ -201,16 +227,45 @@ def load_config():
     return cfg
 
 
-def auth_headers(cfg, with_json=True):
-    """with_json=False for GET requests (see http_get_json)."""
+def resolve_base_url(cfg):
+    """Return the Model Studio origin, constructing it from workspace + region."""
+    if cfg.get("base_url"):
+        return cfg["base_url"].rstrip("/")
+    if cfg.get("legacy_base_url"):
+        raise RuntimeError(
+            "检测到旧版 Vergora 网关配置 / legacy Vergora BASE_URL detected: %s. "
+            "0.4.0 起节点直接调用阿里云百炼：请删除 [API] BASE_URL，填写 WORKSPACE_ID 和 "
+            "REGION，并把 KEY 换成同一地域的百炼 API Key。0.4.0 now calls Model Studio "
+            "directly; remove the legacy BASE_URL and use a DashScope API key from the "
+            "same region." % cfg["legacy_base_url"]
+        )
+    workspace_id = (cfg.get("workspace_id") or "").strip()
+    region = (cfg.get("region") or DEFAULT_REGION).strip()
+    if not workspace_id:
+        raise RuntimeError(
+            "没有配置 Workspace ID / no Workspace ID configured: put WORKSPACE_ID in %s "
+            "under [API], or set DASHSCOPE_WORKSPACE_ID" % CONFIG_PATH
+        )
+    return BASE_URL_TEMPLATE.format(workspace_id=workspace_id, region=region).rstrip("/")
+
+
+def auth_headers(cfg, with_json=True, with_async=False):
+    """Build official headers; GETs omit JSON and async-only headers."""
     if not cfg["api_key"]:
+        legacy = cfg.get("legacy_env_names") or []
+        legacy_hint = (
+            " 检测到旧环境变量 %s；它们不再生效。 / legacy environment variables are "
+            "ignored." % ", ".join(legacy) if legacy else ""
+        )
         raise RuntimeError(
             "没有配置 API key / no API key configured: put it in %s under [API] KEY, "
-            "or set the environment variable VERGORA_API_KEY" % CONFIG_PATH
+            "or set the environment variable DASHSCOPE_API_KEY.%s" % (CONFIG_PATH, legacy_hint)
         )
     headers = {"Authorization": "Bearer " + cfg["api_key"]}
     if with_json:
         headers["Content-Type"] = "application/json"
+    if with_async:
+        headers["X-DashScope-Async"] = "enable"
     return headers
 
 
@@ -228,10 +283,10 @@ def looks_like_network_error(exc):
 
 def network_error_message(exc, url):
     return ("网络中断 / network error while talking to %s: %s\n"
-            "这是到平台的 TLS/连接被切断，多半是本机出网链路（代理、VPN）不稳，不是参数或密钥的问题。"
+            "这是到 Model Studio 的 TLS/连接被切断，多半是本机出网链路（代理、VPN）不稳，不是参数或密钥的问题。"
             "为避免重复建任务重复扣费，提交请求没有自动重试——任务大概率没有创建，直接再跑一次即可；"
             "如果担心，可到平台控制台看这个时间点附近的请求记录再重跑。 / The TLS connection to the "
-            "gateway was cut, most likely a local proxy or VPN hiccup. Submits are deliberately not "
+            "service was cut, most likely a local proxy or VPN hiccup. Submits are deliberately not "
             "retried automatically (a duplicate could be billed twice), so just run again."
             % (url, exc))
 
@@ -240,9 +295,9 @@ def network_error_message(exc, url):
 # Image helpers
 # --------------------------------------------------------------------------
 
-# The gateway sits behind nginx with a ~1 MB request body limit, so inline images have
-# to be budgeted: the raw bytes below become ~1.33x that as Base64 inside the JSON body.
-MAX_BODY_IMAGE_BYTES = 550 * 1024
+# Model Studio accepts images up to 20 MB each. Keep a shared budget so a batch of
+# reference images does not produce an unnecessarily huge JSON request body.
+MAX_BODY_IMAGE_BYTES = 15 * 1024 * 1024
 
 
 def encode_frame(frame, max_bytes):
@@ -278,7 +333,7 @@ def encode_frame(frame, max_bytes):
         if buffer.tell() <= max_bytes:
             return buffer.getvalue(), "jpeg"
 
-    raise RuntimeError("图片压缩后仍然超过网关请求体上限 / image still exceeds the gateway body limit "
+    raise RuntimeError("图片压缩后仍然超过节点预算 / image still exceeds the node's inline-image budget "
                        "after compression；改用图片链接（reference_image_urls）会更稳")
 
 
@@ -346,7 +401,8 @@ def split_uri_lines(text):
 # --------------------------------------------------------------------------
 
 def validate_request(prompt, first_frame, last_frame, reference_images,
-                     reference_videos, reference_audios, file_url, link_url, duration):
+                     reference_videos, reference_audios, file_url, link_url, duration,
+                     prompt_extend):
     """Check the contract locally so a bad request is caught before it is billed."""
     has_prompt = bool(prompt and prompt.strip())
     has_keyframe = bool(first_frame or last_frame)
@@ -369,6 +425,11 @@ def validate_request(prompt, first_frame, last_frame, reference_images,
         raise RuntimeError(
             "file 与 link 不能同时使用 / file and link are mutually exclusive"
         )
+    if (file_url or link_url) and not prompt_extend:
+        raise RuntimeError(
+            "使用 file 或 link 时必须开启 prompt_extend / prompt_extend must be true "
+            "when file or link media is supplied"
+        )
     if len(reference_images) > MAX_REFERENCE_IMAGES:
         raise RuntimeError("reference_images 最多 %d 个 / at most %d reference images"
                            % (MAX_REFERENCE_IMAGES, MAX_REFERENCE_IMAGES))
@@ -384,7 +445,7 @@ def validate_request(prompt, first_frame, last_frame, reference_images,
 
 
 def build_payload(prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
-                  first_frame=None, last_frame=None,
+                  watermark=False, first_frame=None, last_frame=None,
                   reference_images=None, reference_videos=None, reference_audios=None,
                   file_url="", link_url="", extra_json=""):
     reference_images = list(reference_images or [])
@@ -392,36 +453,51 @@ def build_payload(prompt, model, duration, seed, resolution, ratio, audio, promp
     reference_audios = list(reference_audios or [])
     file_url = (file_url or "").strip()
     link_url = (link_url or "").strip()
+    model = LEGACY_MODEL_ALIASES.get(model, model)
+    if model not in VIDEO_MODELS:
+        raise RuntimeError("不支持的模型 / unsupported model: %s; choose one of %s"
+                           % (model, ", ".join(VIDEO_MODELS)))
+    resolution = str(resolution).lower()
+    if resolution not in RESOLUTIONS:
+        raise RuntimeError("不支持的 resolution / unsupported resolution: %s" % resolution)
+    if ratio not in RATIOS:
+        raise RuntimeError("不支持的 ratio / unsupported ratio: %s" % ratio)
 
     validate_request(prompt, first_frame, last_frame, reference_images,
-                     reference_videos, reference_audios, file_url, link_url, duration)
+                     reference_videos, reference_audios, file_url, link_url, duration,
+                     prompt_extend)
 
     payload = {
         "model": model,
-        "duration": int(duration),
-        "resolution": resolution,
-        "ratio": ratio,
-        "audio": bool(audio),
-        "prompt_extend": bool(prompt_extend),
+        "input": {},
+        "parameters": {
+            "resolution": resolution.upper(),
+            "ratio": ratio,
+            "duration": int(duration),
+            "audio": bool(audio),
+            "prompt_extend": bool(prompt_extend),
+            "watermark": bool(watermark),
+        },
     }
     if prompt and prompt.strip():
-        payload["prompt"] = prompt.strip()
+        payload["input"]["prompt"] = prompt.strip()
     if seed is not None and int(seed) >= 0:
-        payload["seed"] = int(seed)
+        payload["parameters"]["seed"] = int(seed)
+
+    media = []
     if first_frame:
-        payload["first_frame"] = first_frame
+        media.append({"type": "first_frame", "url": first_frame})
     if last_frame:
-        payload["last_frame"] = last_frame
-    if reference_images:
-        payload["reference_images"] = reference_images
-    if reference_videos:
-        payload["reference_videos"] = reference_videos
-    if reference_audios:
-        payload["reference_audios"] = reference_audios
+        media.append({"type": "last_frame", "url": last_frame})
+    media.extend({"type": "reference_image", "url": url} for url in reference_images)
+    media.extend({"type": "reference_video", "url": url} for url in reference_videos)
+    media.extend({"type": "reference_audio", "url": url} for url in reference_audios)
     if file_url:
-        payload["file"] = file_url
+        media.append({"type": "file", "url": file_url})
     if link_url:
-        payload["link"] = link_url
+        media.append({"type": "link", "url": link_url})
+    if media:
+        payload["input"]["media"] = media
 
     if extra_json and extra_json.strip():
         try:
@@ -431,12 +507,29 @@ def build_payload(prompt, model, duration, seed, resolution, ratio, audio, promp
         if not isinstance(extra, dict):
             raise RuntimeError('extra_json 必须是 JSON 对象，例如 {"duration": 10} / '
                                'extra_json must be a JSON object')
-        payload.update(extra)
+        nested_input = extra.get("input")
+        nested_parameters = extra.get("parameters")
+        if nested_input is not None and not isinstance(nested_input, dict):
+            raise RuntimeError('extra_json.input 必须是 JSON 对象 / extra_json.input must be an object')
+        if nested_parameters is not None and not isinstance(nested_parameters, dict):
+            raise RuntimeError('extra_json.parameters 必须是 JSON 对象 / '
+                               'extra_json.parameters must be an object')
+        if nested_input:
+            payload["input"].update(nested_input)
+        if nested_parameters:
+            payload["parameters"].update(nested_parameters)
+        payload["parameters"].update({
+            key: value for key, value in extra.items()
+            if key not in ("input", "parameters")
+        })
     return payload
 
 
 def extract_video_url(data):
     """Upstreams differ slightly in shape; try the likely keys in order."""
+    output = data.get("output")
+    if isinstance(output, dict) and isinstance(output.get("video_url"), str):
+        return output["video_url"]
     videos = data.get("videos")
     if isinstance(videos, list) and videos:
         first = videos[0]
@@ -473,16 +566,10 @@ def resolve_output_dir(cfg):
     return os.path.join(HERE, "output")
 
 
-def explain_http_error(status, text, model=None):
-    """Turn the gateway's terse errors into something a user can act on."""
+def explain_http_error(status, text):
+    """Turn Model Studio's terse errors into something a user can act on."""
     lower = (text or "").lower()
     snippet = (text or "")[:200]
-    if "no available channel for model" in lower:
-        return (
-            "模型 %s 在当前账号的渠道分组里没有可用通道 / no available channel for model %s with this "
-            "key. 把 model 换回 w3.0-video，或到平台控制台确认这个模型对你这把 key 是否开放。"
-            "Upstream said: %s" % (model or "?", model or "?", snippet)
-        )
     if "quota" in lower:
         return ("额度不足 / insufficient quota: 这把 key 背后的账户余额已用尽，去平台控制台充值。"
                 "Upstream said: %s" % snippet)
@@ -495,37 +582,41 @@ def explain_http_error(status, text, model=None):
                 % (need.group(1) if need else "?", have.group(1) if have else "?", snippet))
     if status == 400:
         return ("上游拒绝了这次请求的参数 / the upstream rejected the request parameters (HTTP 400): %s "
-                "—— 按它给出的限制调整对应控件后重试（例如它只支持 16:9 / 9:16 / 1:1 时，"
-                "就把 ratio 从 adaptive 改成其中之一）。" % snippet)
+                "—— 按它给出的限制调整对应控件后重试。" % snippet)
     if status == 413:
-        return ("请求体太大被网关拒绝 (HTTP 413) / request body too large: 内嵌图片的 base64 超过了网关的"
-                "请求体上限（nginx 默认 1 MB）。节点会自动压缩图片；如果仍然报这个错，请改用图片链接"
-                "（reference_image_urls），或请平台把 client_max_body_size 调大。")
+        return ("请求体太大 (HTTP 413) / request body too large: 内嵌图片的 base64 超过了服务端限制。"
+                "节点会自动压缩图片；如果仍然报错，请改用图片链接（reference_image_urls）。")
     if status == 404:
-        return ("接口返回 404（路由不存在）/ HTTP 404: 请求没有打到平台预期的接口上。"
-                "最常见的原因是本机配了代理（环境变量 HTTP_PROXY / HTTPS_PROXY、系统代理或 VPN 客户端），"
-                "而它没有把这些路径转发出去；也可能是 BASE_URL 写错。"
-                "给 api.vergora.ai 加直连（设 NO_PROXY=api.vergora.ai）或先停掉代理再试。"
+        return ("接口返回 404 / HTTP 404: 请求没有打到预期的 Model Studio 接口。"
+                "检查 BASE_URL、WORKSPACE_ID 和 REGION 是否属于同一地域；"
+                "如果本机用了代理或 VPN，也要确认它正确转发了该域名。"
                 "Upstream said: %s" % snippet)
     if status in (401, 403):
         return ("鉴权失败 / authentication failed (HTTP %s): 检查 config.ini 里的 KEY。"
                 "Upstream said: %s" % (status, snippet))
-    if status == 524:
-        return ("平台边缘节点超时 (HTTP 524) / edge timeout: 上游这次没在超时时间内返回，重试一次通常就好。"
+    if status == 429:
+        return ("请求频率或并发受限 (HTTP 429) / rate limited: 稍后重试，或降低并发。"
                 "Upstream said: %s" % snippet)
+    if status >= 500:
+        return ("Model Studio 服务端错误 (HTTP %s) / upstream server error: 稍后重试。"
+                "Upstream said: %s" % (status, snippet))
     return None
 
 
 def extract_failure_reason(data):
     """Pull (code, message) out of whichever failure shape the channel used.
 
-    Two shapes show up in practice: `task_info.error` / `data.error` objects, and a
-    `data.fail_reason` field that carries the reason as a JSON *string*.
+    Handles Model Studio's `output.code/message` as well as the older gateway
+    `error` and JSON-string `fail_reason` shapes.
     """
     candidates = []
-    for holder in (data.get("task_info"), data.get("data"), data):
+    for holder in (data.get("output"), data.get("task_info"), data.get("data"), data):
         if not isinstance(holder, dict):
             continue
+        direct_code = str(holder.get("code") or "").strip()
+        direct_message = str(holder.get("message") or "").strip()
+        if direct_code or direct_message:
+            candidates.append({"code": direct_code, "message": direct_message})
         if isinstance(holder.get("error"), dict):
             candidates.append(holder["error"])
         fail = holder.get("fail_reason")
@@ -568,35 +659,55 @@ def explain_task_failure(data, text):
 # Job lifecycle
 # --------------------------------------------------------------------------
 
+def preview_value(value):
+    """Keep submit logs readable even when images are embedded as data URIs."""
+    if isinstance(value, str) and len(value) > 120:
+        return value[:80] + "... (%d chars)" % len(value)
+    if isinstance(value, dict):
+        return {key: preview_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        items = [preview_value(item) for item in value[:3]]
+        if len(value) > 3:
+            items.append("... (%d items)" % len(value))
+        return items
+    return value
+
+
 def submit_task(cfg, payload):
-    url = cfg["base_url"] + "/videos"
-    preview = json.dumps(
-        {k: (v[:60] + "..." if isinstance(v, str) and len(v) > 60 else v) for k, v in payload.items()},
-        ensure_ascii=False,
-    )
-    log("[vergora] 提交任务 / submit -> %s  %s" % (url, preview))
+    base_url = resolve_base_url(cfg)
+    url = base_url + "/api/v1/services/aigc/video-generation/video-synthesis"
+    preview = json.dumps(preview_value(payload), ensure_ascii=False)
+    log("[wan3] 提交任务 / submit -> %s  %s" % (url, preview))
     try:
-        status, text = http_post_json(url, auth_headers(cfg), payload, timeout=120)
+        status, text = http_post_json(
+            url, auth_headers(cfg, with_async=True), payload, timeout=120
+        )
     except Exception as exc:  # noqa: BLE001
         if looks_like_network_error(exc):
             raise RuntimeError(network_error_message(exc, url)) from exc
         raise
     if status >= 400:
-        hint = explain_http_error(status, text, payload.get("model"))
+        hint = explain_http_error(status, text)
         raise RuntimeError(hint or ("提交失败 / submit failed HTTP %s: %s" % (status, text[:400])))
     try:
         data = json.loads(text)
     except Exception as exc:
         raise RuntimeError("提交返回不是 JSON（HTTP %s）/ not JSON: %s" % (status, text[:400])) from exc
-    task_info = data.get("task_info") or {}
-    task_id = task_info.get("id") or data.get("id")
+    output = data.get("output") or {}
+    task_id = output.get("task_id") or data.get("task_id") or data.get("id")
     if not task_id:
-        raise RuntimeError("返回里没有任务 id / no task id in response: %s" % text[:400])
-    log("[vergora] 任务已创建 / task created id=%s status=%s" % (task_id, task_info.get("status")))
+        code, message = extract_failure_reason(data)
+        detail = ("%s %s" % (code, message)).strip()
+        raise RuntimeError("返回里没有任务 id / no task id in response%s: %s"
+                           % ((" (" + detail + ")") if detail else "", text[:400]))
+    log("[wan3] 任务已创建 / task created id=%s status=%s"
+        % (task_id, output.get("task_status")))
     return task_id
 
 
 def wait_for_video(cfg, task_id, progress=None):
+    base_url = resolve_base_url(cfg)
+    task_url = base_url + "/api/v1/tasks/" + task_id
     started = time.time()
     consecutive_errors = 0
     while True:
@@ -608,34 +719,35 @@ def wait_for_video(cfg, task_id, progress=None):
         if elapsed > cfg["timeout"]:
             raise RuntimeError(
                 "等待超时 / timed out after %.0f s. Task %s may still be running; query it with "
-                "GET %s/videos/%s" % (cfg["timeout"], task_id, cfg["base_url"], task_id)
+                "GET %s" % (cfg["timeout"], task_id, task_url)
             )
         try:
             status, text = http_get_json(
-                cfg["base_url"] + "/videos/" + task_id, auth_headers(cfg, with_json=False), timeout=60
+                task_url, auth_headers(cfg, with_json=False), timeout=60
             )
             if status >= 400:
                 raise RuntimeError(explain_http_error(status, text)
                                    or ("HTTP %s: %s" % (status, text[:300])))
             data = json.loads(text)
         except Exception as exc:
-            # A gateway hiccup should not throw away a job that is already running.
+            # A temporary service hiccup should not throw away an already running job.
             consecutive_errors += 1
-            log("[vergora] 查询出错第 %d 次 / poll error %d: %s" % (consecutive_errors, consecutive_errors, exc))
+            log("[wan3] 查询出错第 %d 次 / poll error %d: %s"
+                % (consecutive_errors, consecutive_errors, exc))
             if consecutive_errors >= 5:
                 if looks_like_network_error(exc):
-                    raise RuntimeError(network_error_message(exc, cfg["base_url"] + "/videos/" + task_id))
+                    raise RuntimeError(network_error_message(exc, task_url))
                 raise RuntimeError("连续 %d 次查询失败 / %d consecutive poll failures, last: %s"
                                    % (consecutive_errors, consecutive_errors, exc))
             time.sleep(cfg["poll_interval"])
             continue
         consecutive_errors = 0
-        task_info = data.get("task_info") or {}
-        state = str(task_info.get("status") or data.get("status") or "").lower()
+        output = data.get("output") or {}
+        state = str(output.get("task_status") or data.get("task_status") or "").lower()
         # the upstream reports real progress (and a progress label) on its own channel
         reported = None
         label = ""
-        for holder in (data, data.get("data")):
+        for holder in (data, data.get("output"), data.get("data")):
             if isinstance(holder, dict):
                 value = holder.get("progress")
                 if reported is None and isinstance(value, (int, float)):
@@ -644,16 +756,16 @@ def wait_for_video(cfg, task_id, progress=None):
                     label = holder["progress_text"].strip().splitlines()[0][:40]
         if reported is not None:
             tick_progress(progress, max(0, min(99, reported)))
-        log("[vergora] 已等待 / waited %4.0f s  状态 / status=%s%s"
+        log("[wan3] 已等待 / waited %4.0f s  状态 / status=%s%s"
             % (elapsed, state or "unknown", ("  进度 / progress=%d%%" % reported) if reported is not None else ""))
         if label:
-            log("[vergora]   上游进度说明 / upstream says: %s" % label)
+            log("[wan3]   上游进度说明 / upstream says: %s" % label)
         if state in ("completed", "succeeded", "success", "done"):
             video_url = extract_video_url(data)
             if video_url:
                 return video_url
             raise RuntimeError("任务已完成但没有视频地址 / completed without a video url: %s" % text[:400])
-        if state in ("failed", "error", "canceled", "cancelled"):
+        if state in ("failed", "error", "canceled", "cancelled", "unknown"):
             raise RuntimeError("任务失败 / task failed: %s" % explain_task_failure(data, text))
         time.sleep(cfg["poll_interval"])
 
@@ -666,7 +778,7 @@ def download_video(cfg, video_url, task_id, attempts=3):
     """
     out_dir = resolve_output_dir(cfg)
     os.makedirs(out_dir, exist_ok=True)
-    filename = "vergora_%s_%d.mp4" % (str(task_id).replace("-", "")[:8], int(time.time()))
+    filename = "wan3_%s_%d.mp4" % (str(task_id).replace("-", "")[:8], int(time.time()))
     path = os.path.join(out_dir, filename)
     part = path + ".part"
     last_error = ""
@@ -676,12 +788,12 @@ def download_video(cfg, video_url, task_id, attempts=3):
             size = os.path.getsize(part) if os.path.exists(part) else 0
             if size > 8192:
                 os.replace(part, path)
-                log("[vergora] 已保存 / saved %s (%.1f MB)" % (path, size / 1024.0 / 1024.0))
+                log("[wan3] 已保存 / saved %s (%.1f MB)" % (path, size / 1024.0 / 1024.0))
                 return path
             last_error = "只拿到 %d 字节 / got only %d bytes" % (size, size)
         except Exception as exc:  # noqa: BLE001
             last_error = str(exc)
-        log("[vergora] 下载不完整（%s），第 %d/%d 次重试 / incomplete download, retry %d/%d"
+        log("[wan3] 下载不完整（%s），第 %d/%d 次重试 / incomplete download, retry %d/%d"
             % (last_error, attempt, attempts, attempt, attempts))
         if os.path.exists(part):
             try:
@@ -725,7 +837,7 @@ def generate(prompt, model, duration, seed, resolution, ratio, audio, prompt_ext
              first_frame=None, last_frame=None, first_frame_url="", last_frame_url="",
              reference_images=None, reference_image_urls="",
              reference_video_urls="", reference_audio_urls="",
-             file_url="", link_url="", extra_json=""):
+             file_url="", link_url="", extra_json="", watermark=False):
     cfg = load_config()
     progress = make_progress()
     # split the inline-image budget across every frame we are about to send
@@ -741,7 +853,15 @@ def generate(prompt, model, duration, seed, resolution, ratio, audio, prompt_ext
 
     payload = build_payload(
         prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
-        frame, tail, images, videos, audios, file_url, link_url, extra_json,
+        watermark=watermark,
+        first_frame=frame,
+        last_frame=tail,
+        reference_images=images,
+        reference_videos=videos,
+        reference_audios=audios,
+        file_url=file_url,
+        link_url=link_url,
+        extra_json=extra_json,
     )
     tick_progress(progress, 3)
     task_id = submit_task(cfg, payload)
@@ -756,8 +876,7 @@ def generate(prompt, model, duration, seed, resolution, ratio, audio, prompt_ext
 # --------------------------------------------------------------------------
 
 class VergoraVideoGenerator:
-    """Wan 3.0 video generation: text to video, keyframe (image) to video, or
-    reference to video, all through one node."""
+    """Wan 3.0 video generation through Alibaba Cloud Model Studio."""
 
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
@@ -798,7 +917,10 @@ class VergoraVideoGenerator:
                 "file_url": ("STRING", {"default": "", "tooltip": "Reference mode: document URL (pdf, docx, pptx, ...)"}),
                 "link_url": ("STRING", {"default": "", "tooltip": "Reference mode: public web page URL"}),
                 "extra_json": ("STRING", {"multiline": True, "default": "",
-                                          "tooltip": "Extra request fields, e.g. {\"duration\": 10}"}),
+                                          "tooltip": "Extra request fields. Plain keys merge into parameters; "
+                                                     "input/parameters objects are merged into their sections."}),
+                "watermark": ("BOOLEAN", {"default": False,
+                                          "tooltip": "Add the Model Studio watermark to the generated video"}),
             },
         }
 
@@ -806,13 +928,13 @@ class VergoraVideoGenerator:
             first_frame=None, last_frame=None, first_frame_url="", last_frame_url="",
             reference_images=None, reference_image_urls="",
             reference_video_urls="", reference_audio_urls="",
-            file_url="", link_url="", extra_json=""):
+            file_url="", link_url="", extra_json="", watermark=False):
         path, task_id, video_url = generate(
             prompt, model, duration, seed, resolution, ratio, audio, prompt_extend,
             first_frame, last_frame, first_frame_url, last_frame_url,
             reference_images, reference_image_urls,
             reference_video_urls, reference_audio_urls,
-            file_url, link_url, extra_json,
+            file_url, link_url, extra_json, watermark,
         )
         result = (path, task_id, video_url)
         preview = build_preview_ui(path)
@@ -826,5 +948,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VergoraVideoGenerator": "vergora Wan 3.0 视频生成（文生/图生/参考）",
+    "VergoraVideoGenerator": "Wan 3.0 视频生成（阿里云百炼）",
 }

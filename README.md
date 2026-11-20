@@ -1,255 +1,329 @@
-# ComfyUI Vergora Wan 3.0 Video
+# ComfyUI Wan 3.0 Video
 
-A ComfyUI custom node that generates video with **Wan 3.0** (`w3.0-video`) through the Vergora API.
-Text-to-video, image-to-video and first/last-frame video all live in one node: the request is
-submitted, polled and downloaded for you, and the finished clip shows up in the ComfyUI result panel.
+A ComfyUI custom node for **Wan 3.0** video generation through the official
+Alibaba Cloud Model Studio API.
 
-- **Model:** `w3.0-video` (Wan 3.0, provider listed as `alibaba` in the Vergora model catalog),
-  with the full W3.0 parameter set: all six ratios plus `adaptive`, `480p` / `720p` / `1080p`,
-  text prompts, keyframes, reference media and documents.
-  The other video model, `minimax-h3`, has different rules (it is image-driven, accepts only three
-  ratios and one resolution), so it lives in its own package: **ComfyUI-Vergora-Minimax-h3**.
-- **Modes:** text to video, image to video (first and/or last frame), and reference to video
-  (reference images, videos, audio, documents, or a web link).
-- **Full parameter set:** resolution, aspect ratio, duration, audio on/off, prompt rewriting and
-  seed are all node widgets; the request contract is validated locally before anything is billed.
-- **No code required:** prompts and media are widgets; wiring is optional.
-- **Verified on:** ComfyUI 0.40.0 (frontend 1.55.17), Python 3.13, Windows 11, RTX 5070.
+The repository and package keep the historical `Vergora` name for registry and workflow
+compatibility, but the runtime no longer calls a Vergora gateway. Requests go directly to
+Model Studio.
+
+- Default model: `wan3.0-video`
+- Faster model: `wan3.0-video-prime`
+- Modes: text to video, first/last-frame image to video, and reference to video
+- Includes asynchronous task submission, polling, download and ComfyUI preview
+
+Official API reference:
+<https://docs.modelstudio.console.alibabacloud.com/zh/model-studio/wan3-video-generation-api-reference>
+
+Model market:
+<https://modelstudio.console.alibabacloud.com/ap-southeast-1/model/market>
 
 ## Requirements
 
-- ComfyUI (recent version; developed against 0.40.0)
-- A Vergora API key
-- No extra pip packages are required. The request layer uses `requests` when it is installed and
-  falls back to the Python standard library `urllib` otherwise, so the node loads in any ComfyUI
-  installation.
+- ComfyUI
+- An Alibaba Cloud Model Studio workspace
+- A Model Studio / DashScope API key from the same region
+- No extra `pip` packages are required. `requests` is used when available, with
+  `urllib` as a fallback.
 
 ## Installation
 
-1. Copy this folder into your ComfyUI `custom_nodes` directory:
-   - portable / manual install: `<ComfyUI>/custom_nodes/ComfyUI-Vergora-Wan3`
-   - ComfyUI Desktop: the `custom_nodes` folder is inside the installation base path
-2. Create your own configuration from the shipped template and fill in your key
-   (`config.ini` itself is gitignored and does not exist in a fresh checkout):
-   - Windows: `copy config.ini.example config.ini`
-   - macOS / Linux: `cp config.ini.example config.ini`
+1. Copy this folder into `<ComfyUI>/custom_nodes/ComfyUI-Vergora-Wan3`.
+2. Copy `config.ini.example` to `config.ini`.
+3. Fill in `WORKSPACE_ID`, `REGION`, and `KEY`.
+4. Restart ComfyUI and add the node from the `alibaba` category.
 
-   Then edit the new `config.ini`:
-   ```ini
-   [API]
-   BASE_URL = https://api.vergora.ai/v1
-   KEY = sk-your-key-here
-   ```
-   Every setting is documented inside `config.ini.example`: `BASE_URL`, `KEY`,
-   `POLL_INTERVAL`, `TIMEOUT` and `OUTPUT_DIR`.
-3. Restart ComfyUI, then add the node from the `vergora` category
-   (search for `vergora`, or for `wan3` / `video`).
+Example:
 
-`config.ini` is listed in `.gitignore`; keep your key out of version control. As an alternative you
-can set the environment variables `VERGORA_BASE_URL` and `VERGORA_API_KEY`, which take precedence
-over the file.
+```ini
+[API]
+WORKSPACE_ID = your-workspace-id
+REGION = ap-southeast-1
+KEY = sk-your-dashscope-key
 
-## What is in this repository
+[RUNTIME]
+POLL_INTERVAL = 15
+TIMEOUT = 1200
+OUTPUT_DIR =
+```
 
-| File | Purpose |
-| --- | --- |
-| `nodes.py`, `__init__.py` | The custom node itself |
-| `config.ini.example` | Configuration template, copy it to `config.ini` |
-| `test_offline.py` | Offline self-test, no network or key needed |
-| `pyproject.toml` | Package metadata for the ComfyUI node registry |
-| `README.md`, `CHANGELOG.md`, `LICENSE` | Documentation, release history and license |
+The endpoint is constructed as:
 
-## Node reference
+```text
+https://{WORKSPACE_ID}.{REGION}.maas.aliyuncs.com
+```
 
-Node id: `VergoraVideoGenerator`
-Display name: `vergora Wan 3.0 视频生成（文生/图生/参考）`
-Category: `vergora`
+`BASE_URL` may be set instead when a full origin override is needed.
 
-| Input | Type | Default | Mode | Notes |
-| --- | --- | --- | --- | --- |
-| `prompt` | STRING (multiline) | empty | all | What the clip should show, up to 20000 characters. In reference mode you can address inputs as `Image 1`, `Video 1` |
-| `model` | COMBO | `w3.0-video` | all | `w3.0-video` (Wan 3.0). `minimax-h3` moved to the sibling pack ComfyUI-Vergora-Minimax-h3 |
-| `resolution` | COMBO | `1080p` | all | `1080p` / `720p` / `480p`. This sets the price band |
-| `ratio` | COMBO | `adaptive` | all | `adaptive`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` |
-| `duration` | INT | 5 | all | `-1` for smart duration, otherwise 2 to 30 seconds. This sets the length, not the prompt |
-| `audio` | BOOLEAN | true | all | Whether the clip carries an audio track. Pricing is identical either way |
-| `prompt_extend` | BOOLEAN | **false** | all | Off by default: the prompt is sent as written. Turn it on to let upstream rewrite (expand) it, which usually improves motion but drifts from the original wording |
-| `seed` | INT | -1 | all | `-1` means "do not send a seed". Any value `>= 0` is forwarded |
-| `first_frame` | IMAGE (optional) | - | keyframe | Image to video, or the first frame of a pair |
-| `last_frame` | IMAGE (optional) | - | keyframe | Pair it with `first_frame` for first/last-frame video |
-| `first_frame_url`, `last_frame_url` | STRING (optional) | empty | keyframe | Hosted image URL, used when the IMAGE input is not connected |
-| `reference_images` | IMAGE (optional) | - | reference | A batch of up to 10 reference images |
-| `reference_image_urls` | STRING (multiline, optional) | empty | reference | Extra reference images, one URL or data URI per line |
-| `reference_video_urls` | STRING (multiline, optional) | empty | reference | Reference videos (mp4/mov), one URL per line, up to 5, 15s in total |
-| `reference_audio_urls` | STRING (multiline, optional) | empty | reference | Reference audio (wav/mp3), one URL per line, up to 5, 15s in total |
-| `file_url` | STRING (optional) | empty | reference | Document URL: pdf, docx, doc, pptx, ppt, xlsx, xls, txt, md, key, pages, numbers |
-| `link_url` | STRING (optional) | empty | reference | A public web page URL |
-| `extra_json` | STRING (multiline, optional) | empty | all | Extra request fields, merged into the body last |
+Environment variables take precedence over `config.ini`:
 
-| Output | Type | Notes |
+- `DASHSCOPE_WORKSPACE_ID`
+- `DASHSCOPE_REGION`
+- `DASHSCOPE_API_KEY`
+- `DASHSCOPE_BASE_URL`
+
+`config.ini` is ignored by Git. Keep API keys out of workflows and source control.
+
+## Node Reference
+
+- Node id: `VergoraVideoGenerator` (historical id, kept for workflow compatibility)
+- Display name: `Wan 3.0 视频生成（阿里云百炼）`
+- Category: `alibaba`
+
+### Required inputs
+
+| Input | Default | Notes |
 | --- | --- | --- |
-| `video_path` | STRING | Absolute path of the downloaded `.mp4` |
-| `task_id` | STRING | The upstream task id, useful for support or for polling by hand |
-| `video_url` | STRING | The temporary upstream URL the file was fetched from |
+| `prompt` | empty | Up to 20,000 characters. In reference mode, use `图1`, `视频1`, `音频1`, etc. |
+| `model` | `wan3.0-video` | `wan3.0-video` or `wan3.0-video-prime` |
+| `resolution` | `1080p` | `1080p`, `720p`, or `480p`; sent to the API as uppercase |
+| `ratio` | `adaptive` | `adaptive`, `21:9`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` |
+| `duration` | `5` | `-1` for smart duration, otherwise 2-30 seconds |
+| `audio` | `true` | Include an audio track in the output |
+| `prompt_extend` | `false` | Send the prompt as written by default; enable to let upstream rewrite it |
+| `seed` | `-1` | `-1` omits the field; otherwise 0-2147483647 |
 
-The node is registered as an output node and returns the clip as a preview result, so ComfyUI will
-not complain that the workflow has no output node.
+### Optional inputs
 
-## Modes and mutual exclusivity
-
-The media fields you send decide which capability runs:
-
-| Media fields sent | Capability |
+| Input | Notes |
 | --- | --- |
-| none (prompt only) | text to video |
-| `first_frame` and/or `last_frame` | image to video (keyframe mode) |
-| `reference_images` / `reference_videos` / `reference_audios` / `file` / `link` | reference to video (reference mode) |
+| `first_frame` | `IMAGE` tensor for first-frame video |
+| `last_frame` | `IMAGE` tensor for first/last-frame video |
+| `first_frame_url`, `last_frame_url` | URL or data URI used when the tensor input is absent |
+| `reference_images` | `IMAGE` batch, up to 10 reference images |
+| `reference_image_urls` | One image URL or data URI per line |
+| `reference_video_urls` | One mp4/mov URL per line, up to 5 |
+| `reference_audio_urls` | One wav/mp3 URL per line, up to 5 |
+| `file_url` | Document URL: pdf, docx, pptx, xlsx, txt, md, key, pages, numbers |
+| `link_url` | Public web page URL |
+| `extra_json` | Additional request fields; plain keys merge into `parameters` |
+| `watermark` | Add the Model Studio watermark; defaults to false |
 
-- Keyframe mode and reference mode **cannot be mixed** in one request.
-- `file` and `link` **cannot be sent together**.
-- At least one of `prompt`, a keyframe field or a reference field must be present.
-- Images (`first_frame`, `last_frame`, `reference_images`) accept a public URL, a `data:` URI or bare Base64; `reference_videos` and `reference_audios` are URL only.
-- Limits: images up to 20 MB each with side 240–8000 px and ratio ≤ 8:1; videos mp4/mov up to 100 MB, 1–15 s each and 15 s in total; audio wav/mp3 up to 15 MB, 1–15 s each and 15 s in total. With a video input, input plus output duration must stay within 30 s.
+`watermark` is appended at the end of the widget list so existing workflow widget positions
+remain stable.
 
-The node enforces all of this locally, so a malformed request fails immediately instead of failing
-upstream after you have waited for a queue.
+The API default for `prompt_extend` is `true`. This node intentionally preserves its
+version 0.3.x default of `false`; enable it when you want the upstream rewrite behavior.
 
-## Usage
+### Outputs
 
-> **Upgrading from 0.1.x?** Version 0.2.0 added widgets in the middle of the node
-> (`resolution`, `ratio`, `audio`, `prompt_extend`, and the reference-mode fields). ComfyUI stores
-> a workflow's widget values **by position**, so a workflow saved with 0.1.x will have its values
-> shifted onto the wrong widgets — for example a seed number ends up on `ratio` and an empty string
-> on `seed`, which shows up as "invalid input" before the run starts. The fix is to **delete the
-> node and add it again**; do not try to repair the widgets one by one, because other values may be
-> silently shifted too. Widgets are only ever appended from now on, and any future breaking change
-> will ship under a new node id.
-
-**Text to video.** Fill in `prompt`, keep `duration` at 5 and press Run. The console prints the
-submit call and then one status line per poll; the clip usually lands in two to four minutes.
-While it waits, the node drives ComfyUI's progress bar: it uses the upstream's own percentage when
-the channel reports one (`progress` in the task payload, which the newer channels do), and a
-time-based estimate otherwise. That way the node never looks frozen during a long render.
-
-**Image to video.** Feed any `IMAGE` into `first_frame` (a `LoadImage` node, or the output of an
-image generation node). If your image already lives at a public URL, put the URL in
-`first_frame_url` instead — that keeps the request body small.
-
-**First and last frame.** Connect both `first_frame` and `last_frame`; the model interpolates
-between them.
-
-The downloaded file is saved into the ComfyUI output directory (`folder_paths.get_output_directory()`
-unless `OUTPUT_DIR` is set) and named `vergora_<taskid>_<timestamp>.mp4`.
-
-### Ready-made workflows
-
-The `examples/` folder ships three workflows you can load as-is:
-
-| File | What it wires up |
+| Output | Meaning |
 | --- | --- |
-| `examples/text-to-video.json` | The node on its own, with a sample prompt |
-| `examples/image-to-video.json` | A `LoadImage` node wired into `first_frame` |
-| `examples/reference-to-video.json` | A `LoadImage` node wired into `reference_images` |
+| `video_path` | Absolute path of the downloaded MP4 |
+| `task_id` | Model Studio task id |
+| `video_url` | Temporary result URL returned by Model Studio |
 
-Load one through **Workflow → Open**, or drag the `.json` straight onto the canvas. The two image
-examples point at `example.png`, which does not exist on your machine — click the loader and pick any
-image of your own. Keeping the image inside ComfyUI is also the most robust route: the node sends it
-as Base64, so nothing has to be reachable from the internet.
+## Modes and Validation
 
-## What the node does under the hood
+The media types decide which capability runs:
 
-The Vergora video API is an asynchronous task API with an OpenAI-Sora-style shape:
-
-| Step | Call |
+| Media supplied | Capability |
 | --- | --- |
-| Submit | `POST {BASE_URL}/videos` with `{model, prompt?, resolution, ratio, duration, audio, prompt_extend, seed?, first_frame?, last_frame?, reference_images?, reference_videos?, reference_audios?, file?, link?}` → `{"task_info": {"id": "...", "status": "pending"}}` |
-| Poll | `GET {BASE_URL}/videos/{id}` → `{"task_info": {"status": "pending\|processing\|completed\|failed"}, "videos": ["https://.../result_00.mp4"]}` |
-| Download | `GET videos[0]` |
+| prompt only | text to video |
+| `first_frame` and/or `last_frame` | image to video |
+| `reference_image`, `reference_video`, `reference_audio`, `file`, or `link` | reference to video |
 
-The request body must contain at least one of `prompt`, a keyframe field (`first_frame`,
-`last_frame`) or a reference field (`reference_images`, `reference_videos`, `reference_audios`,
-`file`, `link`). Additional fields are passed through with `extra_json`.
+The node validates these rules before submitting a paid task:
 
-Field names, enums and limits match the upstream Alibaba W3.0 contract documented at
-<https://www.mulerouter.ai/docs/api-reference/endpoint/alibaba/w3.0-video/generation>; the node adds
-the local validation described above on top of it.
+- At least one of `prompt` or media is required.
+- `first_frame` / `last_frame` cannot be mixed with reference media, `file`, or `link`.
+- `file` and `link` are mutually exclusive.
+- `file` or `link` requires `prompt_extend=true`.
+- At most 10 reference images, 5 reference videos, and 5 reference audios.
+- `duration` must be `-1` or an integer from 2 to 30.
+- Inline image tensors are compressed or resized when necessary.
 
-Two implementation details worth knowing if you fork this:
+When a reference video is supplied, Model Studio also requires:
 
-- Polling requests must **not** carry `Content-Type: application/json`. The gateway tries to parse
-  the empty body as JSON and answers `400 common.UnmarshalBodyReusable failed`.
-- Transient gateway errors during polling are retried (five consecutive failures are tolerated)
-  so a hiccup does not throw away an already running job.
+```text
+input video duration + output video duration <= 30 seconds
+```
 
-## Cost
+The node cannot inspect a remote video's duration, so this final check is performed upstream.
 
-Billing is **resolution unit price × billed seconds**, where the billed duration is the length of
-any reference video input plus the length of the generated clip:
+## Official Request Shape
 
-| Resolution | Unit price |
-| --- | --- |
-| 480p | 0.050 USD / second |
-| 720p | 0.100 USD / second |
-| 1080p (default) | 0.200 USD / second |
+The node sends requests to:
 
-So a 5 second 1080p clip is roughly 1.00 USD, and the same clip at 720p roughly 0.50 USD. Failed
-tasks are not billed, and `audio: false` does not lower the price. These are the upstream
-Alibaba W3.0 rates (checked 2026-10-14); a reseller such as Vergora may quote a different rate in
-your console — including a flat per-second price — so confirm what you are actually charged before
-running long clips. The node itself does not meter anything.
+```text
+POST https://{WORKSPACE_ID}.{REGION}.maas.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis
+GET  https://{WORKSPACE_ID}.{REGION}.maas.aliyuncs.com/api/v1/tasks/{task_id}
+```
+
+Submit headers:
+
+```http
+Authorization: Bearer DASHSCOPE_API_KEY
+Content-Type: application/json
+X-DashScope-Async: enable
+```
+
+Request body:
+
+```json
+{
+  "model": "wan3.0-video",
+  "input": {
+    "prompt": "A paper boat drifting down a rainy street",
+    "media": [
+      {
+        "type": "reference_image",
+        "url": "https://example.com/reference.png"
+      }
+    ]
+  },
+  "parameters": {
+    "resolution": "720P",
+    "ratio": "16:9",
+    "duration": 5,
+    "audio": true,
+    "prompt_extend": false,
+    "watermark": false
+  }
+}
+```
+
+Submission response:
+
+```json
+{
+  "output": {
+    "task_id": "0385dc79-5ff8-4d82-bcb6-xxxxxx",
+    "task_status": "PENDING"
+  },
+  "request_id": "4909100c-7b5a-9f92-bfe5-xxxxxx"
+}
+```
+
+Completed task response:
+
+```json
+{
+  "output": {
+    "task_id": "17ed7e50-00cf-4509-aea1-xxxxxx",
+    "task_status": "SUCCEEDED",
+    "video_url": "https://dashscope-result-bj.oss-cn-beijing.aliyuncs.com/xxx/video.mp4"
+  }
+}
+```
+
+The node accepts the official statuses `PENDING`, `RUNNING`, `SUCCEEDED`, `FAILED`,
+`CANCELED`, and `UNKNOWN`.
+
+## Media Limits
+
+Official Model Studio limits:
+
+- Image: JPEG, JPG, PNG without alpha, BMP, WEBP; 240-8000 px per side; ratio no more than
+  8:1; at most 20 MB.
+- Reference video: mp4 or mov; each 1-15 seconds; 15 seconds total; at least 16 fps;
+  240-4096 px per side; ratio no more than 8:1; at most 100 MB.
+- Reference audio: wav or mp3; each and total 1-15 seconds; at most 15 MB.
+- File: up to 100 MB and 50 pages, depending on type.
+- Link: public page that does not require authentication.
+
+Images may be sent as public URLs or Base64 data URIs. Reference videos and audio must use
+public URLs.
+
+## Task Lifetime and Cost
+
+- `task_id` can be queried for 24 hours.
+- The generated video URL is valid for 24 hours, so the node downloads it immediately.
+- Output video is MP4/H.264 at 30 fps.
+- `wan3.0-video` and `wan3.0-video-prime` share the same parameter contract.
+- `wan3.0-video-prime` is the high-speed variant, with capabilities aligned to the standard model.
+- Availability and price are controlled by Model Studio; check the model market before long runs.
 
 ## Troubleshooting
 
-| Symptom | Cause |
+| Symptom | Action |
 | --- | --- |
-| `没有配置 API key` | `KEY` is empty in `config.ini` and `VERGORA_API_KEY` is not set |
-| `503 No available channel for model xxx` | This key has no channel for that model. Ask the platform to enable it for your key |
-| `400 invalid_request` | The upstream rejected a parameter; the message states which one and its allowed values |
-| `402 Insufficient balance` | The request costs more credits than the account holds. The message states the required and available amounts; top up, or lower `resolution` / `duration` |
-| The job completes but the saved file is 0 bytes | The CDN dropped the transfer. The node verifies the download, retries three times, and only then raises an error that contains the video URL so you can fetch it by hand |
-| `413 Request Entity Too Large` | The inline image pushed the request body past the gateway's limit (nginx defaults to 1 MB). The node now budgets and compresses local images automatically; if it still happens, use `reference_image_urls` with a hosted image, or ask the platform to raise `client_max_body_size` |
-| `SSLError`, `UNEXPECTED_EOF_WHILE_READING` or `Max retries exceeded` | The TLS connection to the gateway was cut, which is almost always a local proxy or VPN hiccup rather than a parameter problem. Submits are deliberately **not** retried automatically (a duplicate job could be billed twice) — press Run again. Polling is retried five times before giving up |
-| `401` | Wrong or expired key |
-| `400 prompt is required` | Neither a prompt nor a frame was supplied |
-| `524` | The platform edge timed out. Video generation is asynchronous, so this normally means a platform-side hiccup; retry |
-| Stuck on `pending` / `processing` | Upstream queue. The node waits up to `TIMEOUT` seconds (default 1200) and then tells you how to query the task by hand |
-| `关键帧模式与参考模式互斥` / "mutually exclusive" | `first_frame` / `last_frame` were combined with a reference field |
-| `file 与 link 不能同时使用` | Send only one of `file` and `link` |
-| `reference_images 最多 10 个` | Array limits are 10 images, 5 videos, 5 audios |
-| `duration 只能是 -1 ...` | `duration` must be `-1` (smart duration) or between 2 and 30 |
-| `4002 Infrastructure operation failed` / `Failed to download file: HTTP 502` | The upstream could not fetch the image or video URL you supplied, usually because the link expired or is blocked for its region. Connect an `IMAGE` tensor instead (the node sends Base64) or host the file at a stable public URL |
-| `403 insufficient_quota` | The account behind the API key is out of quota. Top it up in the platform console |
+| `没有配置 Workspace ID` | Fill `WORKSPACE_ID` or set `DASHSCOPE_WORKSPACE_ID` |
+| `没有配置 API key` | Fill `KEY` or set `DASHSCOPE_API_KEY` |
+| `检测到旧版 Vergora 网关配置` | Delete the old `BASE_URL`, add `WORKSPACE_ID`, and replace the old gateway key with a Model Studio key from the same region |
+| `404` | Check `WORKSPACE_ID`, `REGION`, and endpoint; all must belong to the same region |
+| `401` / `403` | Check the key, model access, quota, and region |
+| `429` | Reduce request frequency or concurrency |
+| `file 或 link 必须开启 prompt_extend` | Set `prompt_extend=true` |
+| Failed download of reference media | Use a stable public URL or connect an image tensor instead |
+| Timed out while waiting | Query `GET /api/v1/tasks/{task_id}` manually; the task may still be running |
 
-For the last four cases the node raises its own message instead of dumping the raw gateway body, so
-the error you see in ComfyUI already tells you what to change.
+## Migration from 0.3.x
 
-## Notes and limitations
+Version 0.4.0 changes the runtime from the Vergora gateway to Model Studio:
 
-- The returned `video_url` points at a temporary CDN object. The node downloads it immediately;
-  do not store the URL as a permanent link.
-- `seed` is forwarded, but whether the upstream model honours it is not guaranteed. Use ComfyUI's
-  `control_after_generate = fixed` with a saved seed if you want to try to reproduce a clip.
-- **Host your input media somewhere stable.** Image URLs are fetched by the upstream service, not
-  by this node, and temporary CDN links expire quickly — a link that returned 200 when you made it
-  can be gone minutes later, and the task then fails with `4002 Failed to download file: HTTP 502`.
-  Images supplied as `IMAGE` tensors are sent as Base64 `data:` URIs and never need to be fetched,
-  which is the most robust path; use `first_frame_url` / `reference_image_urls` only with links you
-  control. `reference_videos` and `reference_audios` are URL-only, so those always need a stable
-  public URL.
-  Inline images are re-encoded to stay inside the gateway's request body limit (PNG when it fits,
-  JPEG or a smaller resolution when it does not), with the budget split across however many frames
-  the node is sending.
-- Pricing, availability and the exact set of accepted parameters are controlled by the platform,
-  not by this node.
+- Model ids are now `wan3.0-video` and `wan3.0-video-prime`.
+- Configuration now requires `WORKSPACE_ID` and `REGION`.
+- An old `BASE_URL = https://api.vergora.ai/v1` is rejected instead of being reused.
+- The old gateway API key must be replaced with a Model Studio / DashScope key.
+- The request and response envelopes use the official `input`, `parameters`, and `output` fields.
+- `ratio` now includes `21:9`.
+- `watermark` is available.
+- `file` and `link` require `prompt_extend=true`.
+
+Old workflows that store `w3.0-video` need the model widget changed to `wan3.0-video`.
+
+## Release Tags
+
+Release tags use the form `vMAJOR.MINOR.PATCH` and point to the exact source commit that
+was published to the Comfy Registry.
+
+| Tag | Meaning |
+| --- | --- |
+| `v0.3.2` | Last Vergora gateway release. Uses the legacy `w3.0-video` model id and `/v1/videos` route |
+| `v0.4.0` | First official Alibaba Cloud Model Studio release. Defaults to `wan3.0-video` |
+
+### Parameter differences
+
+| Contract item | `v0.3.2` | `v0.4.0` |
+| --- | --- | --- |
+| Runtime target | Vergora gateway | Alibaba Cloud Model Studio directly |
+| Model widget | `w3.0-video` | `wan3.0-video` (default), `wan3.0-video-prime` |
+| Endpoint | `POST /v1/videos`, `GET /v1/videos/{id}` | Official `/api/v1/services/aigc/video-generation/video-synthesis` and `/api/v1/tasks/{task_id}` |
+| Async header | Not required by the node | `X-DashScope-Async: enable` |
+| Request shape | Flat top-level fields | `model`, `input`, and `parameters` sections |
+| Media shape | `first_frame`, `reference_images`, `reference_videos`, etc. | `input.media[{type, url}]` |
+| Aspect ratios | `adaptive`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` | Adds `21:9` |
+| Watermark | Not exposed | `watermark` widget, default `false` |
+| File/web input | No `prompt_extend` requirement | `file` or `link` requires `prompt_extend=true` |
+| Result envelope | `task_info.status` and `videos[]` | `output.task_status` and `output.video_url` |
+| Configuration | `BASE_URL` and a Vergora key | `WORKSPACE_ID`, `REGION`, and a Model Studio key |
+| Resolution, duration, audio, seed | `1080p`/`720p`/`480p`, `-1` or 2-30 s, audio toggle, seed | Same meanings and defaults |
+
+Tags are annotated release markers. Before a tag is pushed, it can be moved or deleted
+locally. After it has been pushed or used for a Registry release, do not move it; publish a
+new patch version instead.
+
+## Comfy Registry
+
+| Item | Value |
+| --- | --- |
+| Registry page | <https://registry.comfy.org/nodes/comfyui-vergora-wan3> |
+| Registry node id | `comfyui-vergora-wan3` (permanent identity) |
+| Display name | `ComfyUI-Vergora` |
+| Publisher id | `levi-li` |
+| Current package version | `0.4.0` |
+
+The node id remains `comfyui-vergora-wan3` because it is the existing Registry identity and
+preserves install history. The display name identifies the package to users; it does not
+change the install id.
+
+After publication, search for `ComfyUI-Vergora` in ComfyUI-Manager, or install by node id:
+
+```bash
+comfy node install comfyui-vergora-wan3
+```
 
 ## Development
 
-`test_offline.py` exercises the whole flow (submit → poll → download → preview result) against a
-stub HTTP layer. It needs no network, no API key and spends nothing:
+Run the offline test with any Python that has `numpy`:
 
 ```bash
 python test_offline.py
 ```
+
+The test covers submission, official request shape, polling, download retries, validation,
+failure parsing and preview output without network access or cost.
 
 ## License
 
@@ -257,81 +331,34 @@ MIT. See `LICENSE`.
 
 ---
 
-# 中文说明
+## 中文摘要
 
-**ComfyUI Vergora Wan 3.0 视频节点**：通过 Vergora API 调用 **Wan 3.0**（模型名 `w3.0-video`）
-在 ComfyUI 里生成视频。一个节点覆盖三类用法——文生视频、图生视频（关键帧模式）、参考生视频
-（参考模式）；提交、轮询、下载全自动，出片后直接显示在结果面板里。参数与官方 W3.0 契约一致，
-并且提交前会在本地把不合法的请求拦下来，不会白等一次失败任务。
+这个节点现在直接调用**阿里云百炼 Wan 3.0 原厂接口**，不再经过 Vergora 网关。
+仓库和节点 id 中的 `Vergora` 是为了兼容已有工作流和注册表而保留的历史名称。
 
-> 另一个视频模型 **minimax-h3** 的规则完全不同（必须有参考图、只支持三种画幅和一种分辨率），
-> 所以它拆成了独立包 **ComfyUI-Vergora-Minimax-h3**，两个包可以同时安装、互不影响。
+- 默认模型：`wan3.0-video`
+- 高速模型：`wan3.0-video-prime`
+- 请求体：`model + input + parameters`
+- 媒体：`input.media[{type, url}]`
+- 提交：`POST /api/v1/services/aigc/video-generation/video-synthesis`
+- 查询：`GET /api/v1/tasks/{task_id}`
+- 必须配置：`WORKSPACE_ID`、`REGION`、`KEY`
+- `ratio` 新增 `21:9`
+- `watermark` 默认关闭
+- `prompt_extend` 保留节点原有的默认值 `false`；原厂接口默认值为 `true`
+- 使用 `file` 或 `link` 时必须开启 `prompt_extend`
+- 旧版 `BASE_URL = https://api.vergora.ai/v1` 会被拦截，需要删除后改填 `WORKSPACE_ID` 和 `REGION`
+- 旧网关 API Key 不能继续使用，需要换成同一地域的百炼 API Key
 
-**安装**：把整个文件夹放进 ComfyUI 的 `custom_nodes` 目录 → 把 `config.ini.example` 复制一份
-改名为 `config.ini`（Windows：`copy config.ini.example config.ini`），在 `[API]` 的 `KEY` 填上你的
-密钥（`BASE_URL` 默认已经指向平台）→ 重启 ComfyUI → 在 `vergora` 分类下添加节点。
-`config.ini.example` 里每一项都有注释说明；也可以用环境变量 `VERGORA_BASE_URL` / `VERGORA_API_KEY`，
-优先级高于配置文件。`config.ini` 已被 `.gitignore` 忽略，密钥不会被提交。
+旧工作流里的 `w3.0-video` 需要改成 `wan3.0-video`。两个新模型参数一致，只有标准版和
+高速版档位区别；可用地域和计费以阿里云百炼模型广场为准，不需要拆成两个项目。
 
-> **从 0.1.x 升级的注意**：0.2.0 在节点中间新增了 `resolution`、`ratio`、`audio`、`prompt_extend`
-> 以及参考模式那一批控件。ComfyUI 是按**位置**保存工作流控件值的，所以用 0.1.x 存过的工作流会出现
-> 参数错位——比如 seed 的数字跑到 `ratio` 上、空字符串跑到 `seed` 上，运行前就会报"无效输入"。
-> 处理办法是**把该节点删掉重新添加**，不要逐个手改（可能还有别的值被静默错位）。以后控件只会往末尾
-> 追加，不会插在中间；如果将来必须做破坏性改动，会用一个**新的节点 id** 发布，旧版本保持可用。
+发布 tag 使用 `v主版本.次版本.修订版本`：
 
-**三种模式**（发哪些媒体字段，决定用哪种能力）
+- `v0.3.2`：旧 Vergora 网关版，模型为 `w3.0-video`，请求是扁平结构
+- `v0.4.0`：阿里云百炼原厂版，默认模型为 `wan3.0-video`，请求改为
+  `input + parameters + media`
 
-- 文生视频：只填 `prompt`
-- 图生视频（关键帧模式）：图片接到 `first_frame`，只给尾帧也可以；两个都接就是首尾帧
-- 参考生视频（参考模式）：`reference_images`（一批图，最多 10 张，可直接接图像节点）或
-  `reference_image_urls`（一行一个链接）、`reference_video_urls`（最多 5 个，合计不超过 15 秒）、
-  `reference_audio_urls`（最多 5 个，合计不超过 15 秒）、`file_url`（pdf/docx/pptx 等文档）、
-  `link_url`（公开网页）。参考模式下提示词里可以用 `Image 1`、`Video 1` 指代输入素材
-
-**关键约束**：关键帧模式和参考模式**不能混用**；`file` 与 `link` 也**不能同时发**。这些节点会在
-本地直接报错拦下，不会带着错请求去排队。
-
-**开箱可用的工作流**：`examples/` 目录里放了三份可以直接加载的文件（`text-to-video.json` 单独一个
-节点、`image-to-video.json` 用 `LoadImage` 接 `first_frame`、`reference-to-video.json` 接
-`reference_images`）。用法是「工作流 → 打开」选中文件，或把 json 直接拖到画布上；两份带图的里面
-加载器指向 `example.png`，你机器上没有，点一下换成自己的图即可。图片在 ComfyUI 内部传递时节点会
-转成 Base64 发送，不依赖外网可访问性，这是最稳的一条路。
-
-**参数要点**
-
-- `resolution`：`1080p`（默认）/ `720p` / `480p`，这一项直接决定单价
-- `ratio`：`adaptive`（默认，由内容和素材推断）或 `16:9`、`4:3`、`1:1`、`3:4`、`9:16`
-- `duration`：`-1` 表示智能时长，否则 2 到 30 秒；片子长短只由它决定，提示词里写"30 秒"不会改变时长
-- `audio`：是否输出音轨，开或关价格一样
-- `prompt_extend`：**默认关闭**，提示词按原样发送；开启后由上游改写（扩写），通常动作和运镜更丰富，但会偏离原话
-- `seed`：填 `-1` 表示不传种子、让上游随机；填具体数字（0 到 2147483647）会原样传给上游
-- 其它字段可以用 `extra_json` 透传，格式是 JSON 对象
-- 输出：`video_path`（本地 mp4 路径）、`task_id`、`video_url`；文件存到 ComfyUI 的输出目录
-
-**费用**：按"分辨率单价 × 计费秒数"计费，计费秒数 = 参考视频输入时长 + 输出视频时长。
-
-| 分辨率 | 单价 |
-| --- | --- |
-| 480p | 0.050 美元/秒 |
-| 720p | 0.100 美元/秒 |
-| 1080p（默认） | 0.200 美元/秒 |
-
-5 秒 1080p 约 1.00 美元，同样 5 秒的 720p 约 0.50 美元。失败任务不计费，`audio: false` 也不会降价。
-以上是上游阿里 W3.0 的官方价（核对于 2026-10-14）；中转平台（如 Vergora）在你的控制台里可能显示
-另一套口径，甚至是一个按时长统一的单价（例如 0.08 美元/秒），**以你实际账单为准**，跑长片前先确认。
-
-**已知行为**：轮询请求不能带 `Content-Type`（否则网关会解析空 body 并报 400）；轮询期间的偶发
-网关错误会自动重试，不会把已经在跑的任务丢掉。返回的视频链接是临时 CDN 地址，节点会立刻下载，
-不要把它当长期链接存起来。
-
-**素材一定要放在稳定的地方**：图片链接是**由上游去下载**的，不是节点下载的；临时 CDN 链接很快会
-失效（我们实测中生成出来几分钟后就变成 404 了），上游下载失败时任务会以
-`4002 Infrastructure operation failed / Failed to download file: HTTP 502` 结束（失败任务不计费）。
-所以最稳的做法是把图片接到 `IMAGE` 输入上——节点会转成 Base64 内嵌发送，完全不依赖外部可访问性；
-只有在你确信链接长期有效时才用 `first_frame_url` / `reference_image_urls`。参考视频和参考音频
-官方只接受 URL，必须用稳定可公开访问的地址。
-
-**额度**：额度不足时提交会直接返回 `403 insufficient_quota`（不会产生任务和费用）。API 本身查不到
-真实余额，需要到平台控制台确认。
-
-**自测**：`python test_offline.py` 用假的 HTTP 层跑通全流程，不联网、不花钱、不需要密钥。
+完整的字段差异见上方的 “Release Tags / Parameter differences”。Comfy Registry 的节点
+ID 保持 `comfyui-vergora-wan3`，市场显示名为 `ComfyUI-Vergora`。Registry 页面：
+<https://registry.comfy.org/nodes/comfyui-vergora-wan3>。

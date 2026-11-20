@@ -1,5 +1,31 @@
 # Changelog
 
+## 0.4.0 - 2026-11-20
+
+Breaking change: the runtime now calls the official Alibaba Cloud Model Studio Wan 3.0
+API instead of the Vergora gateway.
+
+Changed
+
+- Default model is `wan3.0-video`; `wan3.0-video-prime` is available as the high-speed
+  alternative. Existing workflows storing `w3.0-video` must select the new model id.
+- Requests use the official nested `input` and `parameters` envelopes and the
+  `input.media[{type, url}]` material structure.
+- Submission and polling now use the official asynchronous task routes under
+  `/api/v1/services/aigc/video-generation/video-synthesis` and `/api/v1/tasks/{task_id}`.
+- Configuration now uses `WORKSPACE_ID`, `REGION`, and `KEY`; environment variables are
+  `DASHSCOPE_WORKSPACE_ID`, `DASHSCOPE_REGION`, and `DASHSCOPE_API_KEY`.
+- `ratio` adds `21:9`.
+- `watermark` is available as a final optional widget.
+- `file` and `link` inputs now require `prompt_extend=true`, matching the official contract.
+- Result parsing now reads `output.task_status` and `output.video_url`.
+
+Fixed
+
+- Inline image compression no longer assumes the old gateway's 1 MB body limit.
+- Legacy `api.vergora.ai` base URLs are rejected with a migration message instead of
+  being combined with the new Model Studio routes.
+
 ## 0.3.2 - 2026-10-19
 
 Changed
