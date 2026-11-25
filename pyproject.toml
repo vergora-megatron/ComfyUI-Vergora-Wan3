@@ -1,7 +1,7 @@
 [project]
 name = "comfyui-vergora-wan3"
-version = "0.4.1"
-description = "ComfyUI nodes for Wan 3.0 video generation through Alibaba Cloud Model Studio"
+version = "0.4.2"
+description = "ComfyUI nodes for Wan 3.0 video generation through Vergora or Alibaba Cloud Model Studio"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 dependencies = ["requests"]

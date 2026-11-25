@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.2 - 2026-11-25
+
+Changed
+
+- Restored the Vergora transport as a configurable target alongside Alibaba Cloud
+  Model Studio. Set `[API] BASE_URL = https://api.vergora.ai/v1`; leave `BASE_URL`
+  empty and set `WORKSPACE_ID` + `REGION` to call Model Studio directly.
+- Both targets now use the official Wan 3.0 `model + input + parameters` request body.
+- Vergora submits to `POST /v1/videos` and polls `GET /v1/videos/{task_id}`. Model
+  Studio keeps the official `/api/v1/...` routes.
+- Response parsing accepts both `output.task_status/output.video_url` and
+  `task_info.status/videos`.
+
 ## 0.4.1 - 2026-11-25
 
 Changed

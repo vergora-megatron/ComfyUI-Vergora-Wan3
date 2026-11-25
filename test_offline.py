@@ -22,6 +22,9 @@ import nodes  # noqa: E402
 BASE_URL = "https://ws-test.ap-southeast-1.maas.aliyuncs.com"
 SYNTHESIS_URL = BASE_URL + "/api/v1/services/aigc/video-generation/video-synthesis"
 TASK_URL = BASE_URL + "/api/v1/tasks/test-task-1234"
+VERGORA_BASE_URL = "https://api.vergora.ai/v1"
+VERGORA_SUBMIT_URL = VERGORA_BASE_URL + "/videos"
+VERGORA_TASK_URL = VERGORA_BASE_URL + "/videos/test-task-1234"
 
 STATE = {
     "polls": 0,
@@ -62,6 +65,25 @@ def fake_get_json(url, headers, timeout=60):
     return 200, (
         '{"request_id":"req-test","output":{"task_id":"test-task-1234",'
         '"task_status":"SUCCEEDED","video_url":"https://example.invalid/result.mp4"}}'
+    )
+
+
+def fake_gateway_post_json(url, headers, payload, timeout=120):
+    STATE["post_url"] = url
+    STATE["payload"] = payload
+    STATE["headers"] = headers
+    return 200, '{"task_info":{"id":"test-task-1234","status":"pending"}}'
+
+
+def fake_gateway_get_json(url, headers, timeout=60):
+    STATE["get_headers"] = headers
+    STATE["get_url"] = url
+    STATE["polls"] += 1
+    if STATE["polls"] < 3:
+        return 200, '{"task_info":{"id":"test-task-1234","status":"processing"}}'
+    return 200, (
+        '{"task_info":{"id":"test-task-1234","status":"completed"},'
+        '"videos":["https://example.invalid/result_00.mp4"]}'
     )
 
 
@@ -140,18 +162,43 @@ def main():
     assert standard["input"] == prime["input"], (standard, prime)
     assert (standard["model"], prime["model"]) == ("wan3.0-video", "wan3.0-video-prime")
 
-    # ---- legacy gateway configuration is rejected before any request ----
-    try:
-        nodes.resolve_base_url({
-            "base_url": "",
-            "workspace_id": "",
-            "region": "ap-southeast-1",
-            "legacy_base_url": "https://api.vergora.ai/v1",
-        })
-    except RuntimeError as exc:
-        assert "旧版 Vergora" in str(exc) and "WORKSPACE_ID" in str(exc), exc
-    else:
-        raise AssertionError("a legacy Vergora BASE_URL should be rejected")
+    # ---- one payload contract, two transport route sets ----
+    assert nodes.request_routes(BASE_URL) == (SYNTHESIS_URL, BASE_URL + "/api/v1/tasks/")
+    assert nodes.request_routes(VERGORA_BASE_URL) == (
+        VERGORA_SUBMIT_URL, VERGORA_BASE_URL + "/videos/"
+    )
+    assert nodes.normalize_base_url("https://api.vergora.ai") == VERGORA_BASE_URL
+
+    # The gateway returns task_info/videos instead of output/task_status.
+    gateway_cfg = {
+        "base_url": VERGORA_BASE_URL,
+        "workspace_id": "",
+        "region": "ap-southeast-1",
+        "api_key": "sk-test",
+        "poll_interval": 0.01,
+        "timeout": 30,
+        "output_dir": "",
+    }
+    nodes.http_post_json = fake_gateway_post_json
+    nodes.http_get_json = fake_gateway_get_json
+    STATE["polls"] = 0
+    gateway_task_id = nodes.submit_task(
+        gateway_cfg, {"model": "wan3.0-video", "input": {"prompt": "gateway"}, "parameters": {}}
+    )
+    assert gateway_task_id == "test-task-1234", gateway_task_id
+    assert STATE["post_url"] == VERGORA_SUBMIT_URL, STATE["post_url"]
+    assert STATE["headers"]["Authorization"] == "Bearer sk-test", STATE["headers"]
+    assert "X-DashScope-Async" not in STATE["headers"], STATE["headers"]
+    assert STATE["headers"]["X-DashScope-DataInspection"] == (
+        '{"input":"disable","output":"disable"}'
+    ), STATE["headers"]
+    gateway_video_url = nodes.wait_for_video(gateway_cfg, gateway_task_id)
+    assert gateway_video_url == "https://example.invalid/result_00.mp4", gateway_video_url
+    assert STATE["get_url"] == VERGORA_TASK_URL, STATE["get_url"]
+
+    nodes.http_post_json = fake_post_json
+    nodes.http_get_json = fake_get_json
+    STATE["polls"] = 0
 
     image = np.zeros((64, 96, 3), dtype=np.float32)
     image[:, :, 0] = 1.0

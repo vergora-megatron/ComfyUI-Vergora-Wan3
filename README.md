@@ -1,11 +1,13 @@
 # ComfyUI Wan 3.0 Video
 
-A ComfyUI custom node for **Wan 3.0** video generation through the official
-Alibaba Cloud Model Studio API.
+A ComfyUI custom node for **Wan 3.0** video generation. The request schema follows the
+official Alibaba Cloud Wan 3.0 API, while the transport target is configurable:
+
+- **Vergora**: `https://api.vergora.ai/v1`
+- **Alibaba Cloud Model Studio**: `https://{WORKSPACE_ID}.{REGION}.maas.aliyuncs.com`
 
 The repository and package keep the historical `Vergora` name for registry and workflow
-compatibility, but the runtime no longer calls a Vergora gateway. Requests go directly to
-Model Studio.
+compatibility.
 
 - Default model: `wan3.0-video`
 - Faster model: `wan3.0-video-prime`
@@ -21,8 +23,7 @@ Model market:
 ## Requirements
 
 - ComfyUI
-- An Alibaba Cloud Model Studio workspace
-- A Model Studio / DashScope API key from the same region
+- A Vergora API key, or an Alibaba Cloud Model Studio workspace and API key
 - No extra `pip` packages are required. `requests` is used when available, with
   `urllib` as a fallback.
 
@@ -30,30 +31,36 @@ Model market:
 
 1. Copy this folder into `<ComfyUI>/custom_nodes/ComfyUI-Vergora-Wan3`.
 2. Copy `config.ini.example` to `config.ini`.
-3. Fill in `WORKSPACE_ID`, `REGION`, and `KEY`.
+3. Fill in `BASE_URL` and `KEY` for Vergora, or fill in `WORKSPACE_ID`, `REGION`, and
+   `KEY` for Model Studio.
 4. Restart ComfyUI and add the node from the `alibaba` category.
 
-Example:
+Vergora example:
 
 ```ini
 [API]
-WORKSPACE_ID = your-workspace-id
-REGION = ap-southeast-1
-KEY = sk-your-dashscope-key
+BASE_URL = https://api.vergora.ai/v1
+KEY = sk-your-vergora-key
 
 [RUNTIME]
-POLL_INTERVAL = 15
+POLL_INTERVAL = 10
 TIMEOUT = 1200
 OUTPUT_DIR =
 ```
 
-The endpoint is constructed as:
+Model Studio example:
 
-```text
-https://{WORKSPACE_ID}.{REGION}.maas.aliyuncs.com
+```ini
+[API]
+BASE_URL =
+WORKSPACE_ID = your-workspace-id
+REGION = ap-southeast-1
+KEY = sk-your-dashscope-key
 ```
 
-`BASE_URL` may be set instead when a full origin override is needed.
+For Vergora, requests go to `POST /v1/videos` and `GET /v1/videos/{task_id}`.
+For Model Studio, the node uses the official `/api/v1/...` asynchronous routes.
+Both targets receive the same Wan 3.0 `model + input + parameters` JSON body.
 
 Environment variables take precedence over `config.ini`:
 
@@ -61,13 +68,14 @@ Environment variables take precedence over `config.ini`:
 - `DASHSCOPE_REGION`
 - `DASHSCOPE_API_KEY`
 - `DASHSCOPE_BASE_URL`
+- `VERGORA_API_KEY` and `VERGORA_BASE_URL` as compatibility aliases
 
 `config.ini` is ignored by Git. Keep API keys out of workflows and source control.
 
 ## Node Reference
 
 - Node id: `VergoraVideoGenerator` (historical id, kept for workflow compatibility)
-- Display name: `Wan 3.0 视频生成（阿里云百炼）`
+- Display name: `Wan 3.0 视频生成`
 - Category: `alibaba`
 
 ### Required inputs
@@ -141,26 +149,32 @@ input video duration + output video duration <= 30 seconds
 
 The node cannot inspect a remote video's duration, so this final check is performed upstream.
 
-## Official Request Shape
+## Request Shape
 
-The node sends requests to:
+The payload always follows the official Wan 3.0 request shape. Routes depend on the
+configured target:
 
 ```text
+# Vergora
+POST https://api.vergora.ai/v1/videos
+GET  https://api.vergora.ai/v1/videos/{task_id}
+
+# Alibaba Cloud Model Studio
 POST https://{WORKSPACE_ID}.{REGION}.maas.aliyuncs.com/api/v1/services/aigc/video-generation/video-synthesis
 GET  https://{WORKSPACE_ID}.{REGION}.maas.aliyuncs.com/api/v1/tasks/{task_id}
 ```
 
-Submit headers:
+Submit headers for Model Studio:
 
 ```http
-Authorization: Bearer DASHSCOPE_API_KEY
+Authorization: Bearer API_KEY
 Content-Type: application/json
 X-DashScope-Async: enable
 X-DashScope-DataInspection: {"input":"disable","output":"disable"}
 ```
 
-The node explicitly disables data inspection for Wan 3.0 input and output, as requested by
-the Model Studio request contract.
+For Vergora, the same headers are sent except `X-DashScope-Async`; the gateway manages
+asynchronicity through `/v1/videos`.
 
 Request body:
 
@@ -242,30 +256,29 @@ public URLs.
 
 | Symptom | Action |
 | --- | --- |
-| `没有配置 Workspace ID` | Fill `WORKSPACE_ID` or set `DASHSCOPE_WORKSPACE_ID` |
+| `没有配置接口地址` | Fill `BASE_URL` for Vergora, or `WORKSPACE_ID` + `REGION` for Model Studio |
 | `没有配置 API key` | Fill `KEY` or set `DASHSCOPE_API_KEY` |
-| `检测到旧版 Vergora 网关配置` | Delete the old `BASE_URL`, add `WORKSPACE_ID`, and replace the old gateway key with a Model Studio key from the same region |
-| `404` | Check `WORKSPACE_ID`, `REGION`, and endpoint; all must belong to the same region |
+| `404` | Check that `BASE_URL` includes `/v1` for Vergora, or that `WORKSPACE_ID` and `REGION` match for Model Studio |
 | `401` / `403` | Check the key, model access, quota, and region |
 | `429` | Reduce request frequency or concurrency |
 | `file 或 link 必须开启 prompt_extend` | Set `prompt_extend=true` |
 | Failed download of reference media | Use a stable public URL or connect an image tensor instead |
-| Timed out while waiting | Query `GET /api/v1/tasks/{task_id}` manually; the task may still be running |
+| Timed out while waiting | Query the task URL printed in the error; the task may still be running |
 
-## Migration from 0.3.x
+## Migration from 0.3.x / 0.4.1
 
-Version 0.4.0 changes the runtime from the Vergora gateway to Model Studio:
+Version 0.4.2 supports both transports again, but keeps the official Wan 3.0 payload:
 
 - Model ids are now `wan3.0-video` and `wan3.0-video-prime`.
-- Configuration now requires `WORKSPACE_ID` and `REGION`.
-- An old `BASE_URL = https://api.vergora.ai/v1` is rejected instead of being reused.
-- The old gateway API key must be replaced with a Model Studio / DashScope key.
-- The request and response envelopes use the official `input`, `parameters`, and `output` fields.
+- Vergora uses `BASE_URL = https://api.vergora.ai/v1` and its own key.
+- Model Studio uses `WORKSPACE_ID`, `REGION`, and a DashScope key, with `BASE_URL` empty.
+- Both targets receive `model`, `input`, and `parameters`; Vergora no longer receives the
+  old flat request body.
 - `ratio` now includes `21:9`.
 - `watermark` is available.
 - `file` and `link` require `prompt_extend=true`.
 
-Old workflows that store `w3.0-video` need the model widget changed to `wan3.0-video`.
+Old workflows that store `w3.0-video` should change the model widget to `wan3.0-video`.
 
 ## Release Tags
 
@@ -277,27 +290,28 @@ was published to the Comfy Registry.
 | `v0.3.2` | Last Vergora gateway release. Uses the legacy `w3.0-video` model id and `/v1/videos` route |
 | `v0.4.0` | First official Alibaba Cloud Model Studio release. Defaults to `wan3.0-video` |
 | `v0.4.1` | Adds the disabled data-inspection request header required by Wan 3.0 |
+| `v0.4.2` | Restores Vergora as a configurable transport while keeping the official request body |
 
 ### Parameter differences
 
-| Contract item | `v0.3.2` | `v0.4.0` |
+| Contract item | `v0.3.2` | `v0.4.2` |
 | --- | --- | --- |
-| Runtime target | Vergora gateway | Alibaba Cloud Model Studio directly |
+| Runtime target | Vergora only | Vergora or Alibaba Cloud Model Studio |
 | Model widget | `w3.0-video` | `wan3.0-video` (default), `wan3.0-video-prime` |
-| Endpoint | `POST /v1/videos`, `GET /v1/videos/{id}` | Official `/api/v1/services/aigc/video-generation/video-synthesis` and `/api/v1/tasks/{task_id}` |
-| Async header | Not required by the node | `X-DashScope-Async: enable` |
-| Request shape | Flat top-level fields | `model`, `input`, and `parameters` sections |
+| Endpoint | `POST /v1/videos`, `GET /v1/videos/{id}` | Vergora keeps those routes; Model Studio uses `/api/v1/...` |
+| Async header | Not required by the node | `X-DashScope-Async: enable` for Model Studio only |
+| Request shape | Flat top-level fields | `model`, `input`, and `parameters` sections for both targets |
 | Media shape | `first_frame`, `reference_images`, `reference_videos`, etc. | `input.media[{type, url}]` |
 | Aspect ratios | `adaptive`, `16:9`, `4:3`, `1:1`, `3:4`, `9:16` | Adds `21:9` |
 | Watermark | Not exposed | `watermark` widget, default `false` |
 | File/web input | No `prompt_extend` requirement | `file` or `link` requires `prompt_extend=true` |
-| Result envelope | `task_info.status` and `videos[]` | `output.task_status` and `output.video_url` |
-| Configuration | `BASE_URL` and a Vergora key | `WORKSPACE_ID`, `REGION`, and a Model Studio key |
+| Result envelope | `task_info.status` and `videos[]` | Reads both `task_info/videos` and `output` shapes |
+| Configuration | `BASE_URL` and a Vergora key | Vergora `BASE_URL` + key, or Model Studio `WORKSPACE_ID` + `REGION` + key |
 | Resolution, duration, audio, seed | `1080p`/`720p`/`480p`, `-1` or 2-30 s, audio toggle, seed | Same meanings and defaults |
 
-`v0.4.1` additionally sends
-`X-DashScope-DataInspection: {"input":"disable","output":"disable"}` on Model Studio requests.
-The `v0.4.0` tag predates this header.
+`v0.4.1` introduced
+`X-DashScope-DataInspection: {"input":"disable","output":"disable"}`. `v0.4.2` sends it
+to both targets.
 
 Tags are annotated release markers. Before a tag is pushed, it can be moved or deleted
 locally. After it has been pushed or used for a Registry release, do not move it; publish a
@@ -342,22 +356,24 @@ MIT. See `LICENSE`.
 
 ## 中文摘要
 
-这个节点现在直接调用**阿里云百炼 Wan 3.0 原厂接口**，不再经过 Vergora 网关。
-仓库和节点 id 中的 `Vergora` 是为了兼容已有工作流和注册表而保留的历史名称。
+这个节点现在同时支持 **Vergora** 和 **阿里云百炼原厂** 两种请求地址，参数结构统一按
+Wan 3.0 官方接口执行。仓库和节点 id 中的 `Vergora` 是为了兼容已有工作流和注册表而
+保留的名称。
 
 - 默认模型：`wan3.0-video`
 - 高速模型：`wan3.0-video-prime`
 - 请求体：`model + input + parameters`
 - 媒体：`input.media[{type, url}]`
-- 提交：`POST /api/v1/services/aigc/video-generation/video-synthesis`
-- 查询：`GET /api/v1/tasks/{task_id}`
-- 必须配置：`WORKSPACE_ID`、`REGION`、`KEY`
+- Vergora：`BASE_URL = https://api.vergora.ai/v1`，接口为 `POST /v1/videos` 和
+  `GET /v1/videos/{task_id}`
+- 阿里云原厂：`BASE_URL` 留空，接口为 `/api/v1/services/aigc/...` 和
+  `/api/v1/tasks/{task_id}`
+- 必须配置：`KEY`，以及 Vergora 的 `BASE_URL`，或原厂的 `WORKSPACE_ID + REGION`
 - `ratio` 新增 `21:9`
 - `watermark` 默认关闭
 - `prompt_extend` 保留节点原有的默认值 `false`；原厂接口默认值为 `true`
 - 使用 `file` 或 `link` 时必须开启 `prompt_extend`
-- 旧版 `BASE_URL = https://api.vergora.ai/v1` 会被拦截，需要删除后改填 `WORKSPACE_ID` 和 `REGION`
-- 旧网关 API Key 不能继续使用，需要换成同一地域的百炼 API Key
+- `X-DashScope-DataInspection: {"input":"disable","output":"disable"}` 会随请求发送
 
 旧工作流里的 `w3.0-video` 需要改成 `wan3.0-video`。两个新模型参数一致，只有标准版和
 高速版档位区别；可用地域和计费以阿里云百炼模型广场为准，不需要拆成两个项目。
@@ -368,6 +384,7 @@ MIT. See `LICENSE`.
 - `v0.4.0`：阿里云百炼原厂版，默认模型为 `wan3.0-video`，请求改为
   `input + parameters + media`
 - `v0.4.1`：为 Wan 3.0 请求增加关闭输入、输出数据检查的请求头
+- `v0.4.2`：恢复 Vergora 请求地址，同时继续使用官方请求结构
 
 完整的字段差异见上方的 “Release Tags / Parameter differences”。Comfy Registry 的节点
 ID 保持 `comfyui-vergora-wan3`，市场显示名为 `ComfyUI-Vergora`。Registry 页面：

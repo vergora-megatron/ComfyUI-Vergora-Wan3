@@ -1,60 +1,53 @@
 # ---------------------------------------------------------------------------
-# Wan 3.0 video node - Alibaba Cloud Model Studio configuration
+# Wan 3.0 video node configuration
 #
-# How to use:
-#   1. copy this file to "config.ini" in the same folder
-#        Windows:        copy config.ini.example config.ini
-#        macOS / Linux:  cp config.ini.example config.ini
-#   2. fill in WORKSPACE_ID and KEY
-#   3. restart ComfyUI
+# Copy this file to "config.ini" in the same folder, fill in KEY, then restart
+# ComfyUI. "config.ini" is ignored by Git, so your key stays out of the repo.
 #
-# "config.ini" is listed in .gitignore, so your key never reaches the repo.
 # Environment variables win over this file:
-#   DASHSCOPE_WORKSPACE_ID, DASHSCOPE_REGION,
-#   DASHSCOPE_API_KEY, DASHSCOPE_BASE_URL
+#   DASHSCOPE_BASE_URL / VERGORA_BASE_URL
+#   DASHSCOPE_API_KEY / VERGORA_API_KEY
+#   DASHSCOPE_WORKSPACE_ID, DASHSCOPE_REGION
 # ---------------------------------------------------------------------------
 
 [API]
 
-# Model Studio business workspace ID. The endpoint is:
-# https://{WORKSPACE_ID}.{REGION}.maas.aliyuncs.com
-WORKSPACE_ID =
+# Vergora is selected when BASE_URL is set:
+#   submit POST https://api.vergora.ai/v1/videos
+#   poll   GET  https://api.vergora.ai/v1/videos/{task_id}
+BASE_URL = https://api.vergora.ai/v1
 
-# Region used in the endpoint, for example:
-#   ap-southeast-1 (Singapore), cn-beijing, ap-northeast-1,
-#   eu-central-1, us-east-1, cn-hongkong
-REGION = ap-southeast-1
-
-# DashScope / Model Studio API key. Required.
+# Required for either target.
 KEY =
 
-# Optional full origin override. Leave empty to build it from WORKSPACE_ID and REGION.
-# BASE_URL =
+# Optional: used only when BASE_URL is empty. The node then calls the official
+# Alibaba Cloud Model Studio endpoint:
+# https://{WORKSPACE_ID}.{REGION}.maas.aliyuncs.com
+WORKSPACE_ID =
+REGION = ap-southeast-1
 
 [RUNTIME]
 
-# Seconds between two task status polls. The official guide recommends about 15.
-POLL_INTERVAL = 15
+# Seconds between two task status polls.
+POLL_INTERVAL = 10
 
 # Maximum seconds to wait for one job before the node gives up.
 # Video generation normally takes 1 to 5 minutes.
 TIMEOUT = 1200
 
 # Folder where finished .mp4 files are saved.
-# Leave empty to use ComfyUI's own output directory (recommended).
+# Leave empty to use ComfyUI's own output directory.
 OUTPUT_DIR =
 
 # ---------------------------------------------------------------------------
 # 中文说明
 #
-# 1. 把这个文件复制为 config.ini（Windows：copy config.ini.example config.ini）
-# 2. 在 WORKSPACE_ID 填业务空间 ID，在 KEY 填 Model Studio / DashScope API Key
-# 3. REGION 必须和业务空间、API Key 所属地域一致
+# 1. 把这个文件复制为 config.ini
+# 2. 使用 Vergora：保留上面的 BASE_URL，并填写 KEY
+# 3. 使用阿里云百炼原厂：把 BASE_URL 留空，填写 WORKSPACE_ID、REGION 和 KEY
 # 4. 重启 ComfyUI
 #
-# 默认接口地址根据 WORKSPACE_ID 和 REGION 自动生成，一般不需要填写 BASE_URL。
-# POLL_INTERVAL 是轮询间隔（秒），TIMEOUT 是单个任务最长等待（秒），OUTPUT_DIR 留空
-# 表示保存到 ComfyUI 自己的输出目录。也可以用环境变量 DASHSCOPE_API_KEY、
-# DASHSCOPE_WORKSPACE_ID、DASHSCOPE_REGION、DASHSCOPE_BASE_URL 代替本文件，
-# 环境变量的优先级更高。config.ini 已被 .gitignore 忽略。
+# 两种地址都使用官方 Wan 3.0 的 model + input + parameters 请求结构。
+# Vergora 走 /v1/videos，原厂走 /api/v1/services/aigc/... 和 /api/v1/tasks/...
+# 环境变量优先级高于本文件。config.ini 已被 .gitignore 忽略。
 # ---------------------------------------------------------------------------

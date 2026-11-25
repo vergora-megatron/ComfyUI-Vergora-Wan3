@@ -1,15 +1,21 @@
 # -*- coding: utf-8 -*-
-"""ComfyUI node: Wan 3.0 video generation through Alibaba Cloud Model Studio.
+"""ComfyUI node: Wan 3.0 video generation with an Alibaba-compatible API.
 
 Field set and constraints follow the official Wan 3.0 contract:
 https://docs.modelstudio.console.alibabacloud.com/zh/model-studio/wan3-video-generation-api-reference
 
-Flow:
-    submit  POST {workspace}.{region}/api/v1/services/aigc/video-generation/video-synthesis
-            -> {"output": {"task_id": "...", "task_status": "PENDING"}}
-    poll    GET  {workspace}.{region}/api/v1/tasks/{task_id}
-            -> {"output": {"task_status": "SUCCEEDED", "video_url": "https://..."}}
-    fetch   GET  output.video_url
+The request body always uses the official nested `model + input + parameters`
+structure. The configured endpoint selects only the transport routes:
+
+    Alibaba Cloud Model Studio
+        submit  POST {workspace}.{region}/api/v1/services/aigc/video-generation/video-synthesis
+        poll    GET  {workspace}.{region}/api/v1/tasks/{task_id}
+
+    Vergora
+        submit  POST https://api.vergora.ai/v1/videos
+        poll    GET  https://api.vergora.ai/v1/videos/{task_id}
+
+    fetch  GET video URL returned by either service
 
 Three capability sets are selected by the media fields you send:
     prompt only                              -> text to video
@@ -36,6 +42,7 @@ import time
 import urllib.error
 import urllib.request
 from io import BytesIO
+from urllib.parse import quote, urlparse
 
 import numpy as np
 
@@ -71,6 +78,10 @@ CONFIG_PATH = os.path.join(HERE, "config.ini")
 DEFAULT_REGION = "ap-southeast-1"
 BASE_URL_TEMPLATE = "https://{workspace_id}.{region}.maas.aliyuncs.com"
 DATA_INSPECTION_HEADER = '{"input":"disable","output":"disable"}'
+OFFICIAL_SUBMIT_PATH = "/api/v1/services/aigc/video-generation/video-synthesis"
+OFFICIAL_TASK_PATH = "/api/v1/tasks/"
+VERGORA_SUBMIT_PATH = "/videos"
+VERGORA_TASK_PATH = "/videos/"
 
 VIDEO_MODELS = ["wan3.0-video", "wan3.0-video-prime"]
 RESOLUTIONS = ["1080p", "720p", "480p"]
@@ -171,8 +182,6 @@ def load_config():
         "workspace_id": "",
         "region": DEFAULT_REGION,
         "api_key": "",
-        "legacy_base_url": "",
-        "legacy_env_names": [],
         "poll_interval": 15.0,
         "timeout": 1200.0,
         "output_dir": "",
@@ -186,10 +195,7 @@ def load_config():
             region = parser.get("API", "REGION", fallback="").strip()
             key = parser.get("API", "KEY", fallback="").strip()
             if base:
-                if "vergora.ai" in base.lower():
-                    cfg["legacy_base_url"] = base
-                else:
-                    cfg["base_url"] = base
+                cfg["base_url"] = base
             if workspace:
                 cfg["workspace_id"] = workspace
             if region:
@@ -203,18 +209,16 @@ def load_config():
             if out_dir:
                 cfg["output_dir"] = out_dir
 
-    env_base = os.environ.get("DASHSCOPE_BASE_URL", "").strip()
+    env_base = (
+        os.environ.get("DASHSCOPE_BASE_URL", "").strip()
+        or os.environ.get("VERGORA_BASE_URL", "").strip()
+    )
     env_workspace = os.environ.get("DASHSCOPE_WORKSPACE_ID", "").strip()
     env_region = os.environ.get("DASHSCOPE_REGION", "").strip()
-    env_key = os.environ.get("DASHSCOPE_API_KEY", "").strip()
-    legacy_env_names = [
-        name for name in ("VERGORA_BASE_URL", "VERGORA_API_KEY")
-        if os.environ.get(name, "").strip()
-    ]
-    cfg["legacy_env_names"] = legacy_env_names
-    legacy_env_base = os.environ.get("VERGORA_BASE_URL", "").strip()
-    if legacy_env_base and not env_base:
-        cfg["legacy_base_url"] = legacy_env_base
+    env_key = (
+        os.environ.get("DASHSCOPE_API_KEY", "").strip()
+        or os.environ.get("VERGORA_API_KEY", "").strip()
+    )
     if env_base:
         cfg["base_url"] = env_base
     if env_workspace:
@@ -228,39 +232,50 @@ def load_config():
     return cfg
 
 
+def is_vergora_gateway(base_url):
+    host = (urlparse(base_url).hostname or "").lower()
+    return host == "vergora.ai" or host.endswith(".vergora.ai")
+
+
+def normalize_base_url(base_url):
+    """Normalize gateway roots so both .../v1 and the bare host work."""
+    base_url = (base_url or "").strip().rstrip("/")
+    if is_vergora_gateway(base_url):
+        parsed = urlparse(base_url)
+        if not parsed.path.strip("/"):
+            base_url += "/v1"
+    return base_url
+
+
 def resolve_base_url(cfg):
-    """Return the Model Studio origin, constructing it from workspace + region."""
+    """Return the selected endpoint, or construct Model Studio from workspace + region."""
     if cfg.get("base_url"):
-        return cfg["base_url"].rstrip("/")
-    if cfg.get("legacy_base_url"):
-        raise RuntimeError(
-            "检测到旧版 Vergora 网关配置 / legacy Vergora BASE_URL detected: %s. "
-            "0.4.0 起节点直接调用阿里云百炼：请删除 [API] BASE_URL，填写 WORKSPACE_ID 和 "
-            "REGION，并把 KEY 换成同一地域的百炼 API Key。0.4.0 now calls Model Studio "
-            "directly; remove the legacy BASE_URL and use a DashScope API key from the "
-            "same region." % cfg["legacy_base_url"]
-        )
+        return normalize_base_url(cfg["base_url"])
     workspace_id = (cfg.get("workspace_id") or "").strip()
     region = (cfg.get("region") or DEFAULT_REGION).strip()
     if not workspace_id:
         raise RuntimeError(
-            "没有配置 Workspace ID / no Workspace ID configured: put WORKSPACE_ID in %s "
-            "under [API], or set DASHSCOPE_WORKSPACE_ID" % CONFIG_PATH
+            "没有配置接口地址 / no API endpoint configured: put BASE_URL and KEY in %s under "
+            "[API] for Vergora, or put WORKSPACE_ID, REGION and KEY for Model Studio."
+            % CONFIG_PATH
         )
     return BASE_URL_TEMPLATE.format(workspace_id=workspace_id, region=region).rstrip("/")
+
+
+def request_routes(base_url):
+    """Return (submit_url, task_url_prefix) for the configured transport."""
+    base_url = normalize_base_url(base_url)
+    if is_vergora_gateway(base_url):
+        return base_url + VERGORA_SUBMIT_PATH, base_url + VERGORA_TASK_PATH
+    return base_url + OFFICIAL_SUBMIT_PATH, base_url + OFFICIAL_TASK_PATH
 
 
 def auth_headers(cfg, with_json=True, with_async=False):
     """Build official headers; GETs omit JSON and async-only headers."""
     if not cfg["api_key"]:
-        legacy = cfg.get("legacy_env_names") or []
-        legacy_hint = (
-            " 检测到旧环境变量 %s；它们不再生效。 / legacy environment variables are "
-            "ignored." % ", ".join(legacy) if legacy else ""
-        )
         raise RuntimeError(
             "没有配置 API key / no API key configured: put it in %s under [API] KEY, "
-            "or set the environment variable DASHSCOPE_API_KEY.%s" % (CONFIG_PATH, legacy_hint)
+            "or set DASHSCOPE_API_KEY (or VERGORA_API_KEY)." % CONFIG_PATH
         )
     headers = {
         "Authorization": "Bearer " + cfg["api_key"],
@@ -287,7 +302,7 @@ def looks_like_network_error(exc):
 
 def network_error_message(exc, url):
     return ("网络中断 / network error while talking to %s: %s\n"
-            "这是到 Model Studio 的 TLS/连接被切断，多半是本机出网链路（代理、VPN）不稳，不是参数或密钥的问题。"
+            "这是到接口服务的 TLS/连接被切断，多半是本机出网链路（代理、VPN）不稳，不是参数或密钥的问题。"
             "为避免重复建任务重复扣费，提交请求没有自动重试——任务大概率没有创建，直接再跑一次即可；"
             "如果担心，可到平台控制台看这个时间点附近的请求记录再重跑。 / The TLS connection to the "
             "service was cut, most likely a local proxy or VPN hiccup. Submits are deliberately not "
@@ -559,6 +574,30 @@ def extract_video_url(data):
     return None
 
 
+def extract_task_id(data):
+    """Read a task id from Model Studio or Vergora response envelopes."""
+    for holder in (data.get("output"), data.get("task_info"), data.get("data"), data):
+        if not isinstance(holder, dict):
+            continue
+        for key in ("task_id", "id"):
+            value = holder.get(key)
+            if value:
+                return str(value)
+    return None
+
+
+def extract_task_state(data):
+    """Read a task status from Model Studio or Vergora response envelopes."""
+    for holder in (data.get("output"), data.get("task_info"), data.get("data"), data):
+        if not isinstance(holder, dict):
+            continue
+        for key in ("task_status", "status"):
+            value = holder.get(key)
+            if value:
+                return str(value)
+    return ""
+
+
 def resolve_output_dir(cfg):
     if cfg["output_dir"]:
         return cfg["output_dir"]
@@ -591,8 +630,8 @@ def explain_http_error(status, text):
         return ("请求体太大 (HTTP 413) / request body too large: 内嵌图片的 base64 超过了服务端限制。"
                 "节点会自动压缩图片；如果仍然报错，请改用图片链接（reference_image_urls）。")
     if status == 404:
-        return ("接口返回 404 / HTTP 404: 请求没有打到预期的 Model Studio 接口。"
-                "检查 BASE_URL、WORKSPACE_ID 和 REGION 是否属于同一地域；"
+        return ("接口返回 404 / HTTP 404: 请求没有打到预期的接口。"
+                "检查 BASE_URL 是否包含 Vergora 的 /v1；原厂模式检查 WORKSPACE_ID 和 REGION 是否属于同一地域；"
                 "如果本机用了代理或 VPN，也要确认它正确转发了该域名。"
                 "Upstream said: %s" % snippet)
     if status in (401, 403):
@@ -602,7 +641,7 @@ def explain_http_error(status, text):
         return ("请求频率或并发受限 (HTTP 429) / rate limited: 稍后重试，或降低并发。"
                 "Upstream said: %s" % snippet)
     if status >= 500:
-        return ("Model Studio 服务端错误 (HTTP %s) / upstream server error: 稍后重试。"
+        return ("接口服务端错误 (HTTP %s) / upstream server error: 稍后重试。"
                 "Upstream said: %s" % (status, snippet))
     return None
 
@@ -679,12 +718,13 @@ def preview_value(value):
 
 def submit_task(cfg, payload):
     base_url = resolve_base_url(cfg)
-    url = base_url + "/api/v1/services/aigc/video-generation/video-synthesis"
+    gateway = is_vergora_gateway(base_url)
+    url = request_routes(base_url)[0]
     preview = json.dumps(preview_value(payload), ensure_ascii=False)
     log("[wan3] 提交任务 / submit -> %s  %s" % (url, preview))
     try:
         status, text = http_post_json(
-            url, auth_headers(cfg, with_async=True), payload, timeout=120
+            url, auth_headers(cfg, with_async=not gateway), payload, timeout=120
         )
     except Exception as exc:  # noqa: BLE001
         if looks_like_network_error(exc):
@@ -697,21 +737,20 @@ def submit_task(cfg, payload):
         data = json.loads(text)
     except Exception as exc:
         raise RuntimeError("提交返回不是 JSON（HTTP %s）/ not JSON: %s" % (status, text[:400])) from exc
-    output = data.get("output") or {}
-    task_id = output.get("task_id") or data.get("task_id") or data.get("id")
+    task_id = extract_task_id(data)
     if not task_id:
         code, message = extract_failure_reason(data)
         detail = ("%s %s" % (code, message)).strip()
         raise RuntimeError("返回里没有任务 id / no task id in response%s: %s"
                            % ((" (" + detail + ")") if detail else "", text[:400]))
     log("[wan3] 任务已创建 / task created id=%s status=%s"
-        % (task_id, output.get("task_status")))
+        % (task_id, extract_task_state(data)))
     return task_id
 
 
 def wait_for_video(cfg, task_id, progress=None):
     base_url = resolve_base_url(cfg)
-    task_url = base_url + "/api/v1/tasks/" + task_id
+    task_url = request_routes(base_url)[1] + quote(str(task_id), safe="")
     started = time.time()
     consecutive_errors = 0
     while True:
@@ -746,12 +785,11 @@ def wait_for_video(cfg, task_id, progress=None):
             time.sleep(cfg["poll_interval"])
             continue
         consecutive_errors = 0
-        output = data.get("output") or {}
-        state = str(output.get("task_status") or data.get("task_status") or "").lower()
+        state = extract_task_state(data).lower()
         # the upstream reports real progress (and a progress label) on its own channel
         reported = None
         label = ""
-        for holder in (data, data.get("output"), data.get("data")):
+        for holder in (data, data.get("output"), data.get("task_info"), data.get("data")):
             if isinstance(holder, dict):
                 value = holder.get("progress")
                 if reported is None and isinstance(value, (int, float)):
@@ -880,7 +918,7 @@ def generate(prompt, model, duration, seed, resolution, ratio, audio, prompt_ext
 # --------------------------------------------------------------------------
 
 class VergoraVideoGenerator:
-    """Wan 3.0 video generation through Alibaba Cloud Model Studio."""
+    """Wan 3.0 video generation through Vergora or Model Studio."""
 
     CATEGORY = CATEGORY
     OUTPUT_NODE = True
@@ -952,5 +990,5 @@ NODE_CLASS_MAPPINGS = {
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
-    "VergoraVideoGenerator": "Wan 3.0 视频生成（阿里云百炼）",
+    "VergoraVideoGenerator": "Wan 3.0 视频生成",
 }
