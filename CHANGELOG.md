@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.4.1 - 2026-11-25
+
+Changed
+
+- Every Model Studio request now sends
+  `X-DashScope-DataInspection: {"input":"disable","output":"disable"}`.
+
 ## 0.4.0 - 2026-11-20
 
 Breaking change: the runtime now calls the official Alibaba Cloud Model Studio Wan 3.0

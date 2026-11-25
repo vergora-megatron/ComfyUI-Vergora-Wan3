@@ -179,7 +179,13 @@ def main():
     assert STATE["headers"]["Authorization"] == "Bearer sk-test", STATE["headers"]
     assert STATE["headers"]["Content-Type"] == "application/json", STATE["headers"]
     assert STATE["headers"]["X-DashScope-Async"] == "enable", STATE["headers"]
+    assert STATE["headers"]["X-DashScope-DataInspection"] == (
+        '{"input":"disable","output":"disable"}'
+    ), STATE["headers"]
     assert "Content-Type" not in STATE["get_headers"], STATE["get_headers"]
+    assert STATE["get_headers"]["X-DashScope-DataInspection"] == (
+        '{"input":"disable","output":"disable"}'
+    ), STATE["get_headers"]
 
     assert payload["model"] == "wan3.0-video", payload
     assert payload["input"]["prompt"] == "a red paper boat on a calm lake", payload

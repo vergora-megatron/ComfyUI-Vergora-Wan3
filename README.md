@@ -156,7 +156,11 @@ Submit headers:
 Authorization: Bearer DASHSCOPE_API_KEY
 Content-Type: application/json
 X-DashScope-Async: enable
+X-DashScope-DataInspection: {"input":"disable","output":"disable"}
 ```
+
+The node explicitly disables data inspection for Wan 3.0 input and output, as requested by
+the Model Studio request contract.
 
 Request body:
 
@@ -272,6 +276,7 @@ was published to the Comfy Registry.
 | --- | --- |
 | `v0.3.2` | Last Vergora gateway release. Uses the legacy `w3.0-video` model id and `/v1/videos` route |
 | `v0.4.0` | First official Alibaba Cloud Model Studio release. Defaults to `wan3.0-video` |
+| `v0.4.1` | Adds the disabled data-inspection request header required by Wan 3.0 |
 
 ### Parameter differences
 
@@ -290,6 +295,10 @@ was published to the Comfy Registry.
 | Configuration | `BASE_URL` and a Vergora key | `WORKSPACE_ID`, `REGION`, and a Model Studio key |
 | Resolution, duration, audio, seed | `1080p`/`720p`/`480p`, `-1` or 2-30 s, audio toggle, seed | Same meanings and defaults |
 
+`v0.4.1` additionally sends
+`X-DashScope-DataInspection: {"input":"disable","output":"disable"}` on Model Studio requests.
+The `v0.4.0` tag predates this header.
+
 Tags are annotated release markers. Before a tag is pushed, it can be moved or deleted
 locally. After it has been pushed or used for a Registry release, do not move it; publish a
 new patch version instead.
@@ -302,7 +311,7 @@ new patch version instead.
 | Registry node id | `comfyui-vergora-wan3` (permanent identity) |
 | Display name | `ComfyUI-Vergora` |
 | Publisher id | `levi-li` |
-| Current package version | `0.4.0` |
+| Current package version | `0.4.1` |
 
 The node id remains `comfyui-vergora-wan3` because it is the existing Registry identity and
 preserves install history. The display name identifies the package to users; it does not
@@ -358,6 +367,7 @@ MIT. See `LICENSE`.
 - `v0.3.2`：旧 Vergora 网关版，模型为 `w3.0-video`，请求是扁平结构
 - `v0.4.0`：阿里云百炼原厂版，默认模型为 `wan3.0-video`，请求改为
   `input + parameters + media`
+- `v0.4.1`：为 Wan 3.0 请求增加关闭输入、输出数据检查的请求头
 
 完整的字段差异见上方的 “Release Tags / Parameter differences”。Comfy Registry 的节点
 ID 保持 `comfyui-vergora-wan3`，市场显示名为 `ComfyUI-Vergora`。Registry 页面：

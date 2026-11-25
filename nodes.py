@@ -70,6 +70,7 @@ CONFIG_PATH = os.path.join(HERE, "config.ini")
 
 DEFAULT_REGION = "ap-southeast-1"
 BASE_URL_TEMPLATE = "https://{workspace_id}.{region}.maas.aliyuncs.com"
+DATA_INSPECTION_HEADER = '{"input":"disable","output":"disable"}'
 
 VIDEO_MODELS = ["wan3.0-video", "wan3.0-video-prime"]
 RESOLUTIONS = ["1080p", "720p", "480p"]
@@ -261,7 +262,10 @@ def auth_headers(cfg, with_json=True, with_async=False):
             "没有配置 API key / no API key configured: put it in %s under [API] KEY, "
             "or set the environment variable DASHSCOPE_API_KEY.%s" % (CONFIG_PATH, legacy_hint)
         )
-    headers = {"Authorization": "Bearer " + cfg["api_key"]}
+    headers = {
+        "Authorization": "Bearer " + cfg["api_key"],
+        "X-DashScope-DataInspection": DATA_INSPECTION_HEADER,
+    }
     if with_json:
         headers["Content-Type"] = "application/json"
     if with_async:

@@ -19,11 +19,11 @@ Once published, this package can be installed straight from ComfyUI-Manager.
 3. Run the offline test: `python test_offline.py`.
 4. Commit and push — the registry reads the repository, and the archive is built from git-tracked
    files.
-5. Create an annotated tag named after the package version, for example `v0.4.0`, and push it:
+5. Create an annotated tag named after the package version, for example `v0.4.1`, and push it:
 
    ```bash
-   git tag -a v0.4.0 -m "ComfyUI-Vergora 0.4.0"
-   git push origin v0.4.0
+   git tag -a v0.4.1 -m "ComfyUI-Vergora 0.4.1"
+   git push origin v0.4.1
    ```
 
    Tags use `vMAJOR.MINOR.PATCH`. Do not move or recreate a tag after publication; release a new
